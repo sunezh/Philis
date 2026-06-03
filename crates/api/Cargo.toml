@@ -1,0 +1,29 @@
+[package]
+name = "api"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.74"
+description = "Analog place & route engine"
+license = "MIT"
+
+[lib]
+name = "philis"
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+# The standalone Rust executable that `bench/` benchmarks.
+name = "philis"
+path = "src/main.rs"
+
+[[test]]
+name = "integration"
+path = "test/integration.rs"
+
+[features]
+default = []
+python = ["dep:pyo3"]
+extension-module = ["python", "pyo3/extension-module"]
+
+[dependencies]
+utility = { path = "../utility" }
+pyo3 = { version = "0.23", optional = true, features = ["abi3-py39"] }
