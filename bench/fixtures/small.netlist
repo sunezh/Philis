@@ -1,0 +1,9 @@
+# small.netlist — a handful of cells
+inv0 0 0
+inv1 10 0
+inv2 10 5
+nand0 4 2
+nand1 7 8
+cap0 -3 6
+res0 12 -1
+buf0 2 11
