@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Getting Started — Philis</title>
+    <!-- One level deep: stylesheet lives one directory up -->
+    <link rel="stylesheet" href="../style.css" />
+    <link rel="icon" type="image/svg+xml" href="../mascot.svg" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../index.html">
+        <img src="../mascot.svg" alt="Philis mascot" />
+        Phil<span class="accent">is</span>
+      </a>
+      <nav class="top-nav">
+        <a href="../index.html">Home</a>
+        <a href="getting-started.html" class="active">Usage</a>
+        <a href="../Developer/api/index.html">Developer</a>
+        <a href="https://github.com/OmarSiwy/Philis">GitHub</a>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <!-- Sidebar: mark the current page with class="active" -->
+      <aside class="sidebar">
+        <h4>Usage</h4>
+        <ul>
+          <li>
+            <a href="getting-started.html" class="active">Getting Started</a>
+          </li>
+          <li><a href="installation.html">Installation</a></li>
+          <li><a href="first-layout.html">Your First Layout</a></li>
+        </ul>
+        <h4>Developer</h4>
+        <ul>
+          <li><a href="../Developer/api/index.html">API</a></li>
+          <li><a href="../Developer/place/index.html">Place</a></li>
+          <li><a href="../Developer/route/index.html">Route</a></li>
+          <li><a href="../Developer/constraints/index.html">Constraints</a></li>
+        </ul>
+      </aside>
+
+      <!-- ============ Page content goes here ============ -->
+      <main class="content">
+        <p class="breadcrumb">
+          <a href="../index.html">Home</a> / Usage / Getting Started
+        </p>
+
+        <h1>Getting Started</h1>
+        <p>
+          This is a placeholder page. Replace the body below with your real
+          content — keep the <code>&lt;header&gt;</code>,
+          <code>&lt;aside&gt;</code>, and <code>&lt;main&gt;</code> structure so
+          the theme stays consistent.
+        </p>
+
+        <h2>1. Install</h2>
+        <pre><code>pip install philis ciel</code></pre>
+
+        <h2>2. Enable a technology</h2>
+        <p>
+          Philis is configured through a PDK technology file. ciel ships ready
+          configurations:
+        </p>
+        <pre><code>ciel enable --technology sky130</code></pre>
+
+        <h2>3. Build &amp; route</h2>
+        <pre><code>import philis as ph
+
+design = ph.Design("my_amp")
+# ... describe your circuit ...
+design.place_and_route()
+design.write_gds("my_amp.gds")</code></pre>
+
+        <div class="note">
+          <strong>Next:</strong> see
+          <a href="first-layout.html">Your First Layout</a>
+          for a complete worked example.
+        </div>
+      </main>
+    </div>
+
+    <footer class="site-footer">Philis &middot; Analog Layout Engine</footer>
+  </body>
+</html>

@@ -1,0 +1,541 @@
+
+# A Gradually-Tiered, Low-Coupling, Immediate-Mode Public API for Spout, Evaluated Against Muratori's Reusable-Component Criteria
+
+**Author:** Spout research workspace
+**Date:** 2026-06-02
+**Target venue style:** IEEE EDA/CAD tooling + software-architecture note
+**Scope:** The public surface realized by `crates/api` (crate `spout-api2`, import path `spout_api`)
+**Companion papers:** Spout constraints, placement, router, and verification problem setups
+([`../constraints/`](../constraints/spout-constraints-problem-setup.md),
+[`../placement/`](../placement/spout-placement-problem-setup.md),
+[`../router/`](../router/spout-router-problem-setup.md),
+[`../verification/`](../verification/spout-verification-problem-setup.md)),
+which own the engine contracts this API exposes.
+**Primary external reference:** Casey Muratori, *Designing and Evaluating Reusable
+Components*, 2004 [1].
+
+## Abstract
+
+A place-and-route flow is only as usable as the surface it presents to the
+caller. Spout's engines — constraint compilation (`crates/constraints2`),
+placement (`crates/placer2`), routing (`crates/router2`) over the shared
+`crates/core` schemas — are reached through a single thin façade, `spout-api2`.
+This paper does two things. First, it gives the *definitive*, exhaustive
+enumeration of that façade: every constructor, method, free function, public
+type, and Python binding currently exported, with the exact behavior each one
+has today (including the places where the surface accepts input it silently
+discards). Second, it justifies the design against the most operational
+framework available for evaluating a reusable component — Casey Muratori's five
+axes (*granularity, redundancy, coupling, retention, flow control*) and his
+governing objective of eliminating *integration discontinuities* [1]. We show
+that the façade already wins decisively on retention and flow control, is strong
+but improvable on granularity, and carries two concrete, fixable defects on
+coupling and redundancy. Each finding is tied to a specific symbol and line of
+behavior rather than to taste, and Section VII proposes a minimal set of changes
+that close every identified discontinuity without enlarging the surface. The
+claim of the title — that this is the *best* API for Spout — is therefore made
+in Muratori's sense: it is the surface that costs the integrator the least work
+to adopt, refine, and escape from, at every stage of a project's life.
+
+**Index Terms:** API design, reusable components, integration discontinuity,
+immediate mode, retained mode, granularity, coupling, place-and-route, EDA
+tooling, Rust, PyO3, builder pattern, façade.
+
+## I. Method: Evaluate the API the Way an Integrator Would
+
+Muratori's central methodological instruction is to evaluate a component by
+*integrating it into your own program first*, in *your own terms*, rather than
+by reading the vendor's documentation and adopting the vendor's worldview [1].
+The first thing you write is the code that *uses* the API; the second thing you
+write is, again, the code that uses the API. Only the shape that survives that
+exercise is real.
+
+This paper follows that instruction literally. The enumeration in Section II is
+recovered from the call sites that actually exercise the crate — its integration
+tests (`crates/api/tests/api_smoke.rs`, `builder_api.rs`, `python_api.rs`,
+`pnr_pdk_fixtures.rs`) and its `USAGE.md` worked examples — and then completed by
+reading every `pub` item in `crates/api/src`. The evaluation in Sections IV–VI
+asks Muratori's questions of that recovered surface, not of an idealized one.
+Where the surface promises something it does not deliver, this is reported as a
+defect, because to an integrator a silently-ignored input *is* an integration
+discontinuity: the next development step (adding a constraint and seeing it
+honored) requires disproportionate, undocumented work to discover it had no
+effect.
+
+## II. The Definitive API Surface
+
+The crate is `spout-api2`; its Rust import path is `spout_api`
+(`crates/api/Cargo.toml`). The surface divides into a **SPICE-driven flow path**
+(parse an existing netlist and run it), a **programmatic builder path**
+(construct a circuit in Rust and solve it), a set of **value types and result
+inspectors**, **engine re-exports**, and an optional **Python binding**. Every
+public symbol follows.
+
+### II-A. Units and coordinate value types (`lib.rs`)
+
+| Symbol | Signature | Behavior |
+| --- | --- | --- |
+| `Length` | `struct Length(f64)` — meters | Newtype over an SI length. |
+| `Length::m/um/nm/pm` | `const fn (f64) -> Length` | Construct from meters / micro- / nano- / pico-meters. |
+| `Length::as_meters` | `const fn (self) -> f64` | Raw meters out. |
+| `Length::to_nm_i64` | `fn (self) -> i64` | Rounded integer nanometers. |
+| `Distance` | `struct Distance(pub i64)` — nm | Integer-nanometer spacing/offset. `Distance::new(i64)`. |
+| `Coord` | `struct Coord(pub i64)` — nm | Integer-nanometer absolute coordinate. `Coord::new(i64)`. |
+
+Note already the unit split: `Length` is floating meters, `Distance`/`Coord` are
+integer nanometers, and the `Constraint` enum (II-E) mixes both. This is flagged
+under *coupling/consistency* in Section IV-C.
+
+### II-B. PDK loading (`lib.rs`)
+
+| Symbol | Signature | Behavior |
+| --- | --- | --- |
+| `Pdk` | `struct Pdk { schema, warnings: Vec<String> }` | Parsed PDK schema plus non-fatal load warnings. |
+| `Pdk::from_json_str` | `(&str) -> Result<Pdk, ApiError>` | Parse JSON schema text. |
+| `Pdk::from_json_file` | `(impl AsRef<Path>) -> Result<Pdk, ApiError>` | Parse JSON schema file. |
+| `Pdk::from_path` | `(impl AsRef<Path>) -> Result<Pdk, ApiError>` | **Alias** for `from_json_file`. |
+| `Pdk::from_env` | `(&str) -> Result<Pdk, ApiError>` | Read a path from the named env var, then load it. |
+
+### II-C. SPICE-driven flow path (`lib.rs`)
+
+| Symbol | Signature | Behavior |
+| --- | --- | --- |
+| `Circuit` | `struct Circuit { netlist: SpiceNetlist }` | A parsed netlist. |
+| `Circuit::from_spice_str` | `(&str) -> Result<Circuit, ApiError>` | Parse SPICE text. |
+| `Circuit::from_spice_file` | `(impl AsRef<Path>) -> Result<Circuit, ApiError>` | Parse SPICE file. |
+| `Circuit::select_subckt` | `(self, &str) -> Result<Circuit, ApiError>` | Promote a named subckt's devices to top; error if absent. |
+| `Circuit::use_first_subckt_as_top` | `(self) -> Circuit` | If top is empty, promote the first subckt. Infallible. |
+| `Circuit::run` | `(&self, &Pdk, RunConfig) -> Result<FlowResult, ApiError>` | Run constraints → placement → routing. |
+| `RunConfig` | `struct { row_pitch_nm, site_width_nm, track_pitch_nm: i64, strict_constraints, fabricatability_mode: bool }` | Flow tuning; `Default` = (2000, 20, 160, false, false). |
+| `FlowResult` | `struct { constraints: ConstraintResult, placement: PlacementResult, routing: RoutingResult }` | The three engine outputs, raw. |
+
+### II-D. Programmatic builder path (`builder.rs`)
+
+| Symbol | Signature | Behavior |
+| --- | --- | --- |
+| `CircuitDef` | `struct` | Accumulating circuit builder. `new()`. |
+| `CircuitDef::nmos/pmos/resistor/capacitor/bjt/diode/generic` | `(&mut self, name: &str, FnOnce(&mut DeviceBuilder) -> &mut DeviceBuilder) -> &mut Self` | Add a device of that kind. |
+| `CircuitDef::net` | `(&mut self, name: &str, FnOnce(&mut NetBuilder) -> &mut NetBuilder) -> &mut Self` | Declare a net and its terminal connections. |
+| `CircuitDef::constrain` | `(&mut self, Constraint) -> &mut Self` | Attach a layout constraint. |
+| `CircuitDef::build` | `(&mut self) -> Result<BuiltCircuit, ApiBuildError>` | Validate and synthesize a netlist. |
+| `DeviceBuilder` | `w(Length) · l(Length) · nf(u32) · r(f64) · c(f64) · area(Length) · pj(Length)` | Per-device parameters (each returns `&mut Self`). |
+| `NetBuilder::connect` | `(&mut self, device: &str, impl Into<PortRef>) -> &mut Self` | Bind a device terminal to this net. |
+| `BuiltCircuit` | `device_count() · net_count() · constraints() -> &[Constraint] · warnings() -> &[BuildWarning] · netlist() -> &SpiceNetlist` | Inspect a validated circuit. |
+| `BuiltCircuit::solve` | `(&self, &Pdk, Objective) -> Result<Layout, ApiError>` | One-shot solve at an objective preset. |
+| `BuiltCircuit::solve_with` | `(&self, &Pdk, Objective, FnOnce(&mut HintBuilder)) -> Result<Layout, ApiError>` | Solve with hints (see II-F caveat). |
+| `BuildResult` | `struct { circuit: BuiltCircuit, warnings: Vec<BuildWarning> }` | Currently unused by `build()`; reserved. |
+| `parse_axis` | `(&str) -> Result<spout_core::constraints::Axis, &'static str>` | `"horizontal"\|"x"` → X, `"vertical"\|"y"` → Y. |
+
+### II-E. The `Constraint` enum (`builder.rs`) — honored vs. accepted-and-dropped
+
+`Constraint` is `#[non_exhaustive]` with 22 variants. The integrator-visible
+truth is that `build()` *validates device references for all of them*
+(`constraint_device_refs`) but `solve()` *only forwards ten* of them to the
+engine (`merge_user_constraints`, `builder.rs:220`). The remaining twelve are
+accepted at compile time, pass validation, and are then silently discarded at
+`_ => {}`. This table is the canonical statement of that split.
+
+| Honored today (forwarded to the placement constraint set) | Accepted but silently dropped |
+| --- | --- |
+| `Symmetric(a,b)` → symmetry pair | `SignalFlow(Vec)` |
+| `Matching(a,b)` → **same** symmetry pair | `AspectRatio(f64,f64)` |
+| `SelfSymmetric(a)` → symmetry group | `CellBoundary(Distance,Distance)` |
+| `SymmetricGroup(Vec<(a,b)>)` → symmetry pairs | `FixPosition(name,Coord,Coord)` |
+| `Order(a,b,Axis)` → ordering (always Increasing) | `PlaceOnGrid(name,Distance)` |
+| `Align(Vec,Axis)` → alignment | `PlaceOnBoundary(name,edge)` |
+| `DistanceConstraint(a,b,Distance)` → spacing (axis hard-coded to X) | `Group(Vec,name)` |
+| `GuardRing(Vec,ring)` → guard ring | `PortLocation(name,net,f64)` |
+| `NetShield(net)` → shielding net | `NetMatch(a,b,Distance)` |
+| `SetNetClass(net,"power")` → candidate power net | `MultiWire(net,u8)` |
+| *(any other `SetNetClass` class is dropped)* | `DoNotRoute(net)` |
+| | `ChargeFlow(net)` |
+
+Two honored variants also **lose information** in translation: `Order` discards
+the caller's intended direction (hard-coded `Increasing`), and
+`DistanceConstraint` discards the axis (hard-coded `X`). These are recorded here
+because, to an integrator, a constraint that is *partially* honored is harder to
+debug than one that is cleanly rejected.
+
+### II-F. Objectives, strategies, hints (`objective.rs`, `strategy.rs`, `guided.rs`)
+
+| Symbol | Values / methods | Behavior |
+| --- | --- | --- |
+| `Objective` | `Area · Speed · Power` (`#[non_exhaustive]`) | Maps to row/track-pitch presets (`apply_objective_to_config`). |
+| `Strategy` | `SideBySide · Stacked · Mirror · Interdigitated · CommonCentroid · InterdigitatedDummies · GuardRingEnclosed · Grid` | Consumed only by `HintBuilder::arrange`, which is not yet wired to the engine. |
+| `HintBuilder` | `new() · seed(u64) · fix_position(&str,Length,Length) · arrange(&[&str],Strategy)` | Only `seed` has an effect today, and only a coarse one: it perturbs `track_pitch_nm` (`builder.rs:151`). `fix_position`/`arrange` are recorded, not enforced. |
+
+### II-G. Ports (`port.rs`)
+
+| Symbol | Behavior |
+| --- | --- |
+| `MosfetPort` | `Gate(0) · Drain(1) · Source(2) · Bulk(3)`; `idx()`, `name()`. |
+| `PassivePort` | `Plus(0) · Minus(1)`; `idx()`, `name()`. |
+| `BjtPort` | `Collector(0) · Base(1) · Emitter(2)`; `idx()`, `name()`. |
+| `PortRef` | Opaque `(idx, name)`; `From<MosfetPort/PassivePort/BjtPort>`. The type `NetBuilder::connect` accepts. |
+| `DeviceKind` | `Nmos · Pmos · Resistor · Capacitor · Bjt · Diode · Generic`. |
+| `port_ref_from_name` | `(DeviceKind, &str) -> Option<PortRef>` — string-keyed port lookup (accepts `"body"` as a `Bulk` alias). |
+| `valid_port_names` | `(DeviceKind) -> &'static [&'static str]` — the legal port names per kind. |
+
+### II-H. Layout result inspectors (`layout.rs`)
+
+| Symbol | Signature | Behavior |
+| --- | --- | --- |
+| `Layout::area` | `() -> u64` | Bounding-box area in nm², 0 if degenerate. |
+| `Layout::width` / `height` | `() -> i64` | Bounding-box extents (nm). |
+| `Layout::wirelength` | `() -> f64` | Sum of routed segment half-perimeters. |
+| `Layout::violations` | `() -> Vec<Violation>` | Runs DRC on the routing analysis; each `Violation { message }`. |
+| `Layout::lvs_clean` | `() -> bool` | True iff LVS finds no mismatches. |
+| `Layout::flow` | `() -> &FlowResult` | Escape hatch to the raw engine outputs. |
+| `Violation` | `struct { message: String }` | A single DRC finding, pre-rendered. |
+
+### II-I. Errors (`lib.rs`, `builder.rs`)
+
+| Symbol | Variants |
+| --- | --- |
+| `ApiError` | `Spice(ParseError) · Pdk(PdkError) · Io · SubcktNotFound · EmptyNetlist · MissingPdkPathEnv` |
+| `BuildError` | `DuplicateDevice · DuplicateNet · TerminalConflict{device,port,net_a,net_b} · UnknownDevice` (`#[non_exhaustive]`) |
+| `ApiBuildError` | `Validation(Vec<BuildError>)`; `errors()`, `contains(pred)` |
+| `BuildWarning` | `FloatingNet(String)` (`#[non_exhaustive]`) |
+
+### II-J. Engine re-exports (`lib.rs`)
+
+`spout_api` re-exports the three engines both flatly (`constraints2`, `placer2`,
+`router2`) and under a `next` namespace (`next::constraints`, `next::placer`,
+`next::router`). These are the bottom rung of the granularity ladder
+(Section IV-A): the raw `run_constraints`, `run_placement`, `run_routing`
+oracles and their `*RunInput`/`*Result` types.
+
+### II-K. Python binding (`python.rs`, feature `python`/`extension-module`)
+
+| Symbol | Surface |
+| --- | --- |
+| `PyPdk` | `from_file(str)` · `from_env(str)` (staticmethods). |
+| `PyCircuit` | `from_spice_text(str)` · `from_spice_file(str)` (both auto-promote first subckt) · `run(PyPdk) -> PyRunResult`. |
+| `PyRunResult` | read-only `device_count · placed_count · routed_segments`. |
+| `SpoutApiError` | Python exception type all errors map onto. |
+
+The Python surface is deliberately a strict subset: counters only, no builder,
+no `Layout`. It is the coarsest tier (Section IV-A) and nothing else.
+
+## III. Muratori's Evaluation Framework
+
+Muratori frames the entire problem as the elimination of **integration
+discontinuities** [1]: an API has a discontinuity wherever advancing to the next
+stage of a project requires integration work *disproportionate* to the
+capability gained. The ideal component is one a team can adopt in an afternoon,
+refine incrementally for months, and never be forced to rewrite against. He
+operationalizes "good" along five observable axes.
+
+1. **Granularity** (flexibility vs. simplicity). Can a coarse call be
+   *decomposed* into the smaller steps it performs? His rule of thumb: a
+   non-atomic function should be re-expressible "using between 2 and 4 more
+   granular APIs," and those should be callable too.
+2. **Redundancy** (convenience vs. orthogonality). How many distinct entry
+   points solve the *same* problem? Some redundancy buys convenience; too much
+   fragments the surface and forces the integrator to learn (and choose between)
+   parallel vocabularies.
+3. **Coupling** ("less is always better"). Does using one call secretly require
+   others, or require adopting the component's *datatypes*, memory model, file
+   format, or string handling when the caller already has equivalents?
+4. **Retention** (synchronization vs. automation). Does the component *store*
+   the caller's data and force the caller to keep that copy synchronized
+   (retained mode), or does the caller pass data per call and own all state
+   (immediate mode)? "All retained-mode constructs have immediate-mode
+   equivalents."
+5. **Flow control** ("more game control is always better"). Does the component
+   call *back* into the caller (callbacks, inheritance, owning the main loop),
+   or does the caller always call the component?
+
+His checklist for *accepting* a component includes: every retained construct has
+an immediate equivalent; every callback/inheritance path has an equivalent that
+uses neither; no API forces an API-specific datatype where the caller has its
+own; resource management, file format, and string handling are all *optional*;
+and any non-atomic function decomposes into 2–4 granular ones [1]. Sections IV–VI
+apply exactly these tests.
+
+## IV. Evaluation Along the Five Axes
+
+### IV-A. Granularity — strong, with one missing native rung
+
+The surface is genuinely *tiered*, which is the property Muratori most wants
+(Fig. `diagrams/granularity_ladder.mmd`):
+
+- **Tier 0 (one-shot):** `BuiltCircuit::solve(pdk, Objective)` and
+  `Circuit::run(pdk, RunConfig)` each take a circuit to a finished result in one
+  call.
+- **Tier 1 (decomposed flow):** `Circuit::run` is literally implemented as three
+  sub-steps — `run_constraints`, then `run_placement`, then `run_routing`
+  (`lib.rs:215–238`). This is exactly Muratori's "2 to 4 more granular APIs":
+  the coarse call decomposes into *three* named operations.
+- **Tier 2 (oracles):** those three operations are themselves re-exported
+  (Section II-J), so an integrator can call the raw engine with hand-built
+  `*RunInput` structs and read raw `*Result` structs.
+
+`FlowResult` deliberately keeps the three stage results *separate* rather than
+fusing them, so even the one-shot path exposes the decomposition's outputs. That
+is good granularity by construction.
+
+The **one defect** is that Tier 1 is not reachable in *api2's own vocabulary*.
+There is no `Circuit::analyze(pdk) -> Constraints`, `.place(cfg) -> Placed`,
+`.route(cfg) -> Layout` chain. To stop after placement, inspect it, and then
+route, the integrator must drop two full tiers to `spout_core::placement::
+run_placement` and assemble a `RoutingRunInput` by hand — note that `run_routing`
+needs `placement.solve_summary.baseline_used` threaded into it (`lib.rs:236`),
+a coupling the façade currently hides. That is a textbook integration
+discontinuity: a small new requirement ("look between place and route") forces a
+large, knowledge-heavy step. Section VII-A proposes the three-method staged chain
+that removes it without adding a new concept — it only *exposes* the
+decomposition that `run` already performs internally.
+
+### IV-B. Redundancy — mostly disciplined, two genuine collisions
+
+The surface is restrained. The convenience aliases that exist are cheap and
+clearly labeled: `Pdk::from_path` is an explicit alias of `from_json_file`;
+`from_spice_str`/`from_spice_file` and `from_json_str`/`from_json_file` are the
+unavoidable text-vs-path pair; `select_subckt` (named) vs.
+`use_first_subckt_as_top` (default) are two genuinely different selection
+policies, not two spellings of one. Muratori tolerates this kind of redundancy
+because each entry point maps to a distinct caller intent.
+
+Two cases cross into harmful redundancy:
+
+1. **`Symmetric` and `Matching` are the same operation.** Both push a
+   `SymmetryPairConstraint` (`builder.rs:226`). The surface presents two
+   vocabulary words for one engine behavior, so an integrator must *guess*
+   whether matching differs from symmetry (in analog layout it usually does —
+   matching is about device-parameter equivalence, symmetry about geometric
+   mirroring). Either they should diverge in behavior or collapse to one name
+   with the other documented as a deprecated alias.
+2. **Dropped-constraint redundancy of *appearance*.** The twelve silently
+   dropped variants (Section II-E) are worse than redundant: they are surface
+   that *looks* like capability and is not. This is discussed as a transparency
+   defect in IV-F.
+
+### IV-C. Coupling — good on inputs, leaky on the seam types
+
+On **inputs**, coupling is low, which is the hard direction to get right.
+`NetBuilder::connect` takes `impl Into<PortRef>`, so a caller may pass a typed
+`MosfetPort::Gate`, and `port_ref_from_name` additionally allows string-keyed
+ports — the caller is never forced into a single vocabulary. `Length` takes a
+plain `f64`; the builder never demands that the caller adopt a Spout container,
+allocator, or file format. PDK and circuit each have *three* independent ingress
+points (str / file / env, and str / file / builder), satisfying Muratori's
+"resource management and file format must be optional" tests directly.
+
+The **defect** is on the *seam types* — the types the API hands back, or embeds
+in its own enums:
+
+- `Constraint::Order` and `Constraint::Align` embed
+  `spout_core::constraints::Axis` *in the public `Constraint` enum*
+  (`builder.rs:18,21`), and `parse_axis` returns that same core type
+  (`builder.rs:776`). So an integrator cannot construct an ordering constraint
+  without `use spout_core::...` — the façade forces an engine-specific datatype
+  into the caller's code for a concept (an axis) the API could trivially own.
+  This is precisely the checklist violation "no API requires the use of an
+  API-specific datatype." Section VII-B introduces `spout_api::Axis`.
+- `FlowResult` and `Layout::flow()` expose `ConstraintResult`,
+  `PlacementResult`, `RoutingResult` from `spout_core` raw. This is acceptable
+  *as a labeled escape hatch* (Muratori explicitly wants the lower tier
+  reachable), but it means any code that reads results is coupled to core. The
+  mitigation already present — `area`, `width`, `height`, `wirelength`,
+  `violations`, `lvs_clean` — is the right shape: it lets the *common* result
+  questions be asked in api2's own terms, reserving `flow()` for the escape. The
+  recommendation (VII-C) is only to widen that inspector set so dropping to
+  `flow()` is rarer, not to remove the hatch.
+- **Unit coupling between the API's own types.** `Length` is f64 meters;
+  `Distance`/`Coord` are i64 nanometers; `Constraint` uses all three. This is an
+  *internal* inconsistency rather than an external coupling, but it taxes the
+  integrator the same way. VII-D proposes unifying construction.
+
+### IV-D. Retention — essentially ideal (immediate mode)
+
+This is the axis the API wins outright. Nothing in the flow retains caller data
+across calls in a way the caller must keep synchronized:
+
+- `Circuit::run(&self, pdk, cfg)` borrows everything and returns a fresh
+  `FlowResult`. Re-running with a different `RunConfig` needs no teardown.
+- `CircuitDef` accumulates *into a value*, and `build()` produces an immutable
+  `BuiltCircuit`; there is no hidden global registry of devices or nets to
+  invalidate.
+- `BuiltCircuit::solve` clones the netlist internally (`builder.rs:137,154`) and
+  computes — the same circuit can be solved repeatedly at different objectives
+  with no interference.
+- `Pdk` is a plain value; passing `&pdk` to many circuits shares nothing
+  mutable.
+
+This is exactly Muratori's "immediate-mode equivalent exists for every retained
+construct" — here there are *no* retained constructs to begin with. The only
+state-bearing object, `HintBuilder`, is filled and consumed within a single
+`solve_with` call (`builder.rs:147`) and never outlives it.
+
+### IV-E. Flow control — essentially ideal (caller drives)
+
+The caller is always in charge. The API never registers a callback that it later
+invokes to drive a loop, never requires the caller to implement a trait the
+engine calls into, and never owns an event loop. The closures the builder takes
+— `nmos(name, |d| d.w(...))`, `net(name, |n| n.connect(...))`,
+`solve_with(.., |h| h.seed(7))` — are **configuration** closures: they run
+*synchronously, exactly once, inside the call*, return a `&mut Self`, and hand
+control straight back. They are syntactic scoping, not inversion of control.
+Muratori's specific anti-patterns — `SetFileCallbacks` style registration, and
+`class MyHandle : public file_handle` style inheritance — are both absent. The
+caller writes a straight-line sequence of calls and reads return values, which is
+the shape he prescribes.
+
+### IV-F. Transparency — the one substantive correctness defect
+
+Muratori's checklist includes "any data which does not clearly have a reason for
+being opaque should be transparent in all possible ways." The dual of that for
+*behavior* is: an API should not silently accept input it will not act on. The
+twelve dropped `Constraint` variants (Section II-E) violate this. `build()` even
+validates their device references — giving the integrator positive feedback that
+the constraint was "accepted" — and then `solve()` discards them at `_ => {}`.
+The integrator's natural next development step ("add `FixPosition`, re-solve,
+confirm the device moved") fails *silently*, which is the most expensive failure
+mode an API can have. This is the single change in Section VII with correctness
+(not just ergonomic) stakes (VII-E).
+
+## V. The Integration-Discontinuity Walkthrough
+
+Muratori's acceptance test is a *staged refinement* story where each stage reuses
+the previous one's code (Fig. `diagrams/integration_discontinuity.mmd`). Spout's
+surface passes the first four stages cleanly:
+
+```
+Step 1  (adopt in minutes):
+    let out = Circuit::from_spice_file("inv.sp")?
+        .use_first_subckt_as_top()
+        .run(&pdk, RunConfig::default())?;
+
+Step 2  (move to programmatic construction — Step 1 code still compiles):
+    let layout = CircuitDef::new()
+        .nmos("M1", |d| d.w(Length::um(2.0)).l(Length::nm(180.0)).nf(2))
+        .nmos("M2", |d| d.w(Length::um(2.0)).l(Length::nm(180.0)).nf(2))
+        .net("GATE", |n| n.connect("M1", MosfetPort::Gate).connect("M2", MosfetPort::Gate))
+        .constrain(Constraint::Symmetric("M1".into(), "M2".into()))
+        .build()?
+        .solve(&pdk, Objective::Area)?;
+
+Step 3  (add a hint — Step 2 code is a strict prefix):
+    .solve_with(&pdk, Objective::Area, |h| h.seed(7))?;
+
+Step 4  (interrogate the result — additive, no rewrite):
+    layout.area(); layout.wirelength(); layout.violations(); layout.lvs_clean();
+```
+
+Each step is a strict superset of the previous one's code — the defining
+property of a discontinuity-free surface. The **one cliff** appears at Step 5,
+when the integrator wants to inspect placement *before* routing: today that
+requires abandoning the api2 vocabulary entirely and reconstructing the engine
+call by hand (Section IV-A). Closing that single cliff (VII-A) makes the staged
+story complete.
+
+## VI. Checklist Scorecard
+
+Applying Muratori's explicit acceptance checklist [1] item by item
+(Fig. `diagrams/casey_scorecard.mmd`):
+
+| Checklist item | Verdict | Evidence |
+| --- | --- | --- |
+| Coarse functions decompose into 2–4 granular ones | **Pass** | `run` = constraints+placement+routing (3). |
+| …and those granular ones are callable | **Pass (with seam gap)** | re-exported as `next::*`; not yet api2-native (VII-A). |
+| No required API-specific datatype where caller has its own | **Fail** | `spout_core::Axis` leaks via `Constraint`/`parse_axis` (VII-B). |
+| Resource management optional | **Pass** | str/file/env/builder ingress; no forced allocator. |
+| File format optional | **Pass** | SPICE *or* programmatic builder; JSON PDK *or* env path. |
+| Retained constructs have immediate equivalents | **Pass (vacuous)** | no retained state (IV-D). |
+| Callback/inheritance paths have non-callback equivalents | **Pass (vacuous)** | configuration closures only (IV-E). |
+| Opaque only with reason; otherwise transparent | **Partial** | result inspectors good; dropped constraints opaque-by-omission (VII-E). |
+| Integrate in *your* terms, not theirs | **Pass on input, partial on output** | low input coupling; result types are core's (VII-C). |
+
+Five clean passes, two vacuous passes (the strongest kind — the hazard cannot
+arise), and three actionable gaps, all localized.
+
+## VII. Recommended Changes (Surface-Preserving)
+
+Every recommendation below *closes a discontinuity without adding a new concept*
+the integrator must learn. None enlarges the conceptual surface; several shrink
+it.
+
+**VII-A. Expose the middle tier in api2's own vocabulary.** Add a staged chain
+that returns api2-owned handles:
+`Circuit::analyze(&Pdk) -> Result<Constraints>`,
+`Constraints::place(RunConfig) -> Result<Placed>`,
+`Placed::route(RunConfig) -> Result<Layout>`, with `run` redefined as their
+composition. This exposes the decomposition `run` already performs (IV-A) and
+internalizes the `baseline_used` threading the integrator otherwise has to
+discover. Removes the Step-5 cliff (Section V).
+
+**VII-B. Own the `Axis` type.** Introduce `pub enum spout_api::Axis { X, Y }`
+with `From<Axis> for spout_core::constraints::Axis` internally; change
+`Constraint::Order`/`Align` and `parse_axis` to use it. Removes the only forced
+core-datatype dependency (IV-C). Mechanical; touches `builder.rs`, the re-export
+list, and two tests.
+
+**VII-C. Widen the result inspectors.** Add the handful of questions that today
+force a drop to `flow()` — e.g. `Layout::placed_count()`,
+`routed_segment_count()`, `instances() -> impl Iterator<Item = PlacedInstance>`
+over an api2-owned `PlacedInstance` (not `spout_core`'s) — so reading results
+rarely couples to core. Keep `flow()` as the labeled escape hatch.
+
+**VII-D. Unify unit construction.** Give `Distance`/`Coord` the same
+`um/nm`-style constructors as `Length`, or have the `Constraint` variants take
+`Length` and convert internally, so the integrator learns one unit vocabulary,
+not three (IV-C).
+
+**VII-E. Make dropped constraints honest (highest priority — correctness).**
+Pick one: (a) implement the missing twelve in `merge_user_constraints`; or, until
+then, (b) emit a `BuildWarning::UnsupportedConstraint(kind)` from `build()` and a
+hard `ApiError`/log from `solve()` for any constraint the engine will not honor;
+and (c) document the `Order`-direction and `DistanceConstraint`-axis information
+loss. This converts the surface's single silent-failure mode (IV-F) into a
+visible, debuggable one and makes the Section II-E table enforceable rather than
+merely descriptive.
+
+**VII-F. Resolve the `Symmetric`/`Matching` collision** (IV-B): either give
+`Matching` distinct parameter-matching semantics or document it as an alias.
+
+Adopting VII-A, VII-B, and VII-E alone turns every "Partial/Fail" row of the
+Section VI scorecard into a "Pass" and makes the staged story of Section V
+complete end to end.
+
+## VIII. Conclusion
+
+Judged by the only widely-used operational rubric for reusable components —
+Muratori's five axes and the integration-discontinuity objective [1] — Spout's
+`spout-api2` is already a strong surface and a defensible "best" choice for the
+project. It is **immediate-mode** (no retained state to synchronize) and
+**caller-driven** (no callbacks or inheritance seize control), which are the two
+axes most APIs get wrong and which are the hardest to retrofit; it is **low
+coupling on its inputs**; and it is **genuinely tiered**, so a project can adopt
+it in one line and refine for months without a rewrite. The case is not made by
+assertion: Section II pins every claim to an enumerated symbol, and Sections
+IV–VI pin every strength and every defect to a specific line of behavior. The
+three real defects — a missing native middle tier, a leaked `Axis` type, and
+silently-dropped constraints — are all *localized* and all *surface-preserving*
+to fix (Section VII). An API whose remaining flaws can each be closed without the
+integrator learning a new concept is, in Muratori's precise sense, the surface
+that costs the least to live with. That is the claim this paper defends, and the
+bar against which any future change to `crates/api` should be measured.
+
+## References
+
+[1] C. Muratori, "Designing and Evaluating Reusable Components," 2004.
+Slides, video, and notes: https://caseymuratori.com/blog_0024 . Annotated
+transcript: https://github.com/jceipek/designing-reusable-components .
+
+[2] Spout constraints problem setup,
+[`../constraints/spout-constraints-problem-setup.md`](../constraints/spout-constraints-problem-setup.md).
+
+[3] Spout placement problem setup,
+[`../placement/spout-placement-problem-setup.md`](../placement/spout-placement-problem-setup.md).
+
+[4] Spout router problem setup,
+[`../router/spout-router-problem-setup.md`](../router/spout-router-problem-setup.md).
+
+[5] Spout verification problem setup,
+[`../verification/spout-verification-problem-setup.md`](../verification/spout-verification-problem-setup.md).
+
+[6] Realizing crate: [`crates/api`](../../crates/api) (`spout-api2`, import path
+`spout_api`).
+
+

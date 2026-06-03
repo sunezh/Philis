@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Your First Layout — Philis</title>
+    <link rel="stylesheet" href="../style.css" />
+    <link rel="icon" type="image/svg+xml" href="../mascot.svg" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../index.html">
+        <img src="../mascot.svg" alt="Philis mascot" />
+        Phil<span class="accent">is</span>
+      </a>
+      <nav class="top-nav">
+        <a href="../index.html">Home</a>
+        <a href="getting-started.html" class="active">Usage</a>
+        <a href="../Developer/api/index.html">Developer</a>
+        <a href="https://github.com/OmarSiwy/Philis">GitHub</a>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <h4>Usage</h4>
+        <ul>
+          <li><a href="getting-started.html">Getting Started</a></li>
+          <li><a href="installation.html">Installation</a></li>
+          <li>
+            <a href="first-layout.html" class="active">Your First Layout</a>
+          </li>
+        </ul>
+        <h4>Developer</h4>
+        <ul>
+          <li><a href="../Developer/api/index.html">API</a></li>
+          <li><a href="../Developer/place/index.html">Place</a></li>
+          <li><a href="../Developer/route/index.html">Route</a></li>
+          <li><a href="../Developer/constraints/index.html">Constraints</a></li>
+        </ul>
+      </aside>
+
+      <main class="content">
+        <p class="breadcrumb">
+          <a href="../index.html">Home</a> / Usage / Your First Layout
+        </p>
+
+        <h1>Your First Layout</h1>
+        <p>
+          Placeholder page — walk the reader through a complete example here.
+        </p>
+
+        <h2>Describe the circuit</h2>
+        <pre><code>import philis as ph
+
+design = ph.Design("inverter")
+nmos = design.add_device("nmos", w=1.0, l=0.15)
+pmos = design.add_device("pmos", w=2.0, l=0.15)
+design.connect(nmos.gate, pmos.gate, name="in")
+design.connect(nmos.drain, pmos.drain, name="out")</code></pre>
+
+        <h2>Place &amp; route</h2>
+        <pre><code>design.place_and_route()
+design.write_gds("inverter.gds")
+design.write_python("inverter_layout.py")  # reproducible source</code></pre>
+
+        <div class="note warn">
+          <strong>Note:</strong> the API names above are illustrative — swap
+          them for the real symbols once the API stabilises.
+        </div>
+      </main>
+    </div>
+
+    <footer class="site-footer">Philis &middot; Analog Layout Engine</footer>
+  </body>
+</html>

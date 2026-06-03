@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Constraints — Philis</title>
+    <link rel="stylesheet" href="../../style.css" />
+    <link rel="icon" type="image/svg+xml" href="../../mascot.svg" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../../index.html">
+        <img src="../../mascot.svg" alt="Philis mascot" />
+        Phil<span class="accent">is</span>
+      </a>
+      <nav class="top-nav">
+        <a href="../../index.html">Home</a>
+        <a href="../../Usage/getting-started.html">Usage</a>
+        <a href="../api/index.html" class="active">Developer</a>
+        <a href="https://github.com/OmarSiwy/Philis">GitHub</a>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <h4>Developer</h4>
+        <ul>
+          <li><a href="../api/index.html">API</a></li>
+          <li><a href="../place/index.html">Place</a></li>
+          <li><a href="../route/index.html">Route</a></li>
+          <li>
+            <a href="../constraints/index.html" class="active">Constraints</a>
+          </li>
+        </ul>
+        <h4>Usage</h4>
+        <ul>
+          <li>
+            <a href="../../Usage/getting-started.html">Getting Started</a>
+          </li>
+          <li><a href="../../Usage/installation.html">Installation</a></li>
+        </ul>
+      </aside>
+
+      <main class="content">
+        <p class="breadcrumb">
+          <a href="../../index.html">Home</a> / Developer / Constraints
+        </p>
+
+        <h1>Constraints</h1>
+        <p>
+          Placeholder page. Document the constraints users can impose on
+          placement and routing — symmetry, matching, alignment, spacing.
+        </p>
+
+        <h2>Overview</h2>
+        <p>Explain the constraint system here.</p>
+
+        <h2>Example</h2>
+        <pre><code>design.add_constraint(ph.Symmetry([nmos_a, nmos_b], axis="y"))
+design.add_constraint(ph.Match([res_1, res_2]))</code></pre>
+
+        <div class="note danger">
+          <strong>Caution:</strong> over-constraining a design can make P&amp;R
+          infeasible. Start loose and tighten.
+        </div>
+      </main>
+    </div>
+
+    <footer class="site-footer">Philis &middot; Analog Layout Engine</footer>
+  </body>
+</html>

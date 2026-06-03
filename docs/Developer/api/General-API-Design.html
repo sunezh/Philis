@@ -1,0 +1,154 @@
+# Casey Muratori's API Design Rules — The "Perfect API" Checklist, and Spout's
+Compliance **Source:** Casey Muratori, *Designing and Evaluating Reusable
+Components*, GameTech 2004 [[talk]](https://caseymuratori.com/blog_0024) ·
+[[visual
+transcript]](https://github.com/jceipek/designing-reusable-components/blob/master/ReusableComponents/ReusableComponents.md)
+· [[checklist
+notes]](https://gist.github.com/vsapsai/6f524c5095a7ae647f1746c762954f9f).
+Shorthand and tradeoff names from Chris Hecker, [*API
+Design*](https://chrishecker.com/API_Design). **Purpose of this file.** This is
+the canonical, faithful statement of Casey's rules — the axes, the tradeoffs,
+and the verbatim acceptance checklist that defines his "perfect" reusable
+component — followed by a line-item compliance verdict for Spout's
+[`crates/api`](../../crates/api) (`spout-api2`). The full argument lives in
+[spout-api-design.md](spout-api-design.md); this file is the rulebook and the
+scorecard. Verdicts cite `file.rs:line` in `crates/api/src`. > **The
+one-sentence thesis.** "Optimizing the five characteristics leads to an > API
+which is **gradually tiered, highly decoupled, has no retention at its most >
+granular tier, and always lets the [caller] dictate the flow of control.**" > —
+*Designing and Evaluating Reusable Components* [1] > **The governing
+objective.** The primary goal of component API design is to > **eliminate
+integration discontinuities** — points where reaching the next > capability you
+need costs work wildly out of proportion to the benefit, "which > typically
+happen around ship time, just when it's most unfortunate" [1]. --- ## Part 1 —
+The Five Axes (the design dimensions) Each axis is a named tradeoff. Coupling
+and flow control have **no upside** — you only minimize them. The other three
+are genuine balances. ### Axis 1 — Granularity — `A or BC` — *flexibility vs.
+simplicity* **Rule:** A coarse operation should be expressible as the finer
+sequence that performs it, so the caller can interleave its own logic between
+the steps. - **Bad:** `UpdateOrientation(Object);` — monolithic, no say in how.
+- **Good:** `o = GetOrientation(Object); c = GetOrientationChange(Object);
+SetOrientation(Object, o + c);` — and you can run your own code between the read
+and the write. - **Heuristic (verbatim):** *"Any API function your game may not
+consider atomic can be re-written using between 2 and 4 more granular APIs (not
+counting accessors)."* ### Axis 2 — Redundancy — `A or B` — *convenience vs.
+orthogonality* **Rule:** Offer multiple convenient ways to reach the same result
+— accept the caller's representations, and pre-bundle common step sequences —
+without fragmenting the surface into chaos. - **Good:** `SetOrientation3x3(o,
+M)` *or* `SetOrientationQ(o, Q)`; convenience shortcuts like `FaceForwards(o)`;
+bundled granular steps. - **Principle (Larry Wall, via Jon Blow, via Hecker):**
+an API should be *"diagonal, not orthogonal as conventional programming wisdom
+states… you want to travel the shortest distance, not have to take the Manhattan
+path."* Convenience redundancy is a **virtue**, not a smell. ### Axis 3 —
+Coupling — `A implies B` — *less is always better (no upside)* **Rule:** Doing
+one thing must not secretly require doing another — no hidden ordering, no
+bundled allocate-and-initialize, no shared internal buffers, and **no forcing
+the caller to adopt your datatypes, memory model, or file format**. - **Bad:**
+`UpdateEverything(Universe)`; `SetTime(t); UpdateObject(o)` (hidden ordering);
+`GetMungedName(a); GetMungedName(b)` (same returned buffer);
+`AllocateAndInitialize()` (can't separate); `SetOrientationM(o, TheirMatrix)`
+(forces their type); `ReadObject(Filename)` (forces their file format). ### Axis
+4 — Retention — `A equals B` — *synchronization vs. automation* **Rule:**
+Anything the API remembers for you (retained mode) must also be doable by
+passing the data per call (immediate mode). Retained mode automates, but forces
+you to keep your state and its cached copy in sync. - **Bad (retained):**
+`SetParent(child, parent); UpdateOrientation(child);` — you must diff your
+intent against the API's stored state every frame. - **Good (immediate):**
+`DoJoint(Rocket, Pole);` called each frame — express intent directly, no
+bookkeeping. ### Axis 5 — Flow Control — `A invokes B` — *more caller control is
+always better (no upside)* **Rule:** The caller calls the component and the
+component returns. The component must not call back into the caller to drive the
+work. - **Bad:** `SetFileCallbacks(Open, Read, Close); f = OpenFile(name);` —
+library calls back into you. **A virtual override is a callback in disguise**
+and earns the same red flag, as do exceptions in a licensable API. - **Good:**
+`f = OpenFile(name);` — straight call, you own the loop. --- ## Part 2 — The
+Perfect-API Checklist (verbatim acceptance tests) These are Casey's acceptance
+bullets, as preserved in the checklist notes [1]. **A "perfect" component passes
+all of them.** Each is followed by Spout's verdict. | # | Rule (verbatim) |
+Spout `spout-api2` verdict | | --- | --- | --- | | 1 | "The first thing you did
+was write the code that uses the API." | **Pass.** The surface is exercised by
+integration tests and `USAGE.md` examples that read as ordinary call sites
+(`tests/api_smoke.rs`, `builder_api.rs`). | | 2 | "The second thing you did was
+write the code that uses the API." | **Pass.** Two independent usage paths exist
+— SPICE-driven (`Circuit::run`) and programmatic (`CircuitDef…build…solve`). | |
+3 | "All retained mode constructs have immediate-mode equivalents." | **Pass
+(vacuous — the strongest kind).** There are no retained constructs:
+`run`/`solve` borrow inputs and return fresh values; `build()` yields an
+immutable `BuiltCircuit` (builder.rs:554). | | 4 | "For every API that uses
+callbacks or inheritance, there is an equivalent API that does neither." |
+**Pass (vacuous).** The closures (`nmos(name, |d|…)`, `solve_with(|h|…)`) are
+configuration callbacks run once in-call (builder.rs:404–413, 141–148); no trait
+impl, inheritance, or registered callback is required. | | 5 | "No API requires
+the use of an API-specific datatype for which the average [caller] already has
+an equivalent." | **Fail.** `Constraint::Order`/`Align` embed
+`spout_core::constraints::Axis`, and `parse_axis` returns it (builder.rs:17–18,
+776). Fix: own `spout_api::Axis` (see [spout-api-design.md](spout-api-design.md)
+§X-B). | | 6 | "Any API function your [caller] may not consider atomic can be
+re-written using between 2 and 4 more granular APIs (not counting accessors)." |
+**Pass with a seam gap.** `Circuit::run` decomposes into exactly 3 oracles —
+`run_constraints` → `run_placement` → `run_routing` (lib.rs:215–238) — but those
+are only reachable by dropping to `spout_core`, not in api2's own vocabulary
+(§X-A). | | 7 | "Any data which does not clearly have a reason for being opaque
+should be transparent in all possible ways (construction, access, I/O, etc.)." |
+**Fail (behavioral).** 13 of 22 `Constraint` cases pass `build()` validation and
+are then silently dropped at `_ => {}` (builder.rs:296, 533–539) — the API
+signals acceptance of input it discards. Fix: emit
+`BuildWarning::UnsupportedConstraint` (§X-E). | | 8 | "Use of the component's
+resource management (memory, file, string, etc.) is completely optional." |
+**Pass.** PDK loads from str/file/env; circuits from str/file/builder; no forced
+allocator or container. | | 9 | "Use of the component's file format is
+completely optional." | **Pass.** A circuit can be built entirely in Rust
+(`CircuitDef`) with no SPICE; a PDK via env path with no explicit file argument.
+| | 10 | "Full run-time source code is available." | **Pass.** The crate ships
+as source in the workspace. | **Score: 8 / 10 pass (two vacuous), 2 fail.** Both
+failures (rules 5 and 7) are localized to single functions and fixable without
+enlarging the surface. --- ## Part 3 — The Integration-Discontinuity Ladder (the
+acceptance test in motion) Casey's worked example removes a discontinuity by
+progressively decoupling I/O, decompression, allocation, and parsing — so the
+caller can stop at whichever rung it needs. The point is **not** "always use the
+last rung"; it is "every rung is available, so no step is a cliff" [1]: ``` A
+Thing = ReadFile(name); // BAD: I/O + parse fused B SetFileCallbacks(...); Thing
+= ReadFile(name); // callbacks (flow-control loss) C Thing =
+MakeThingFromData(FileData); // I/O separated from parsing D FileData =
+DecompressFile(Raw); Thing = MakeThingFromData(FileData); // decompress split E
+SetMemoryCallbacks(...); ... // drags you BACK to callbacks — avoid F Size =
+GetProcessedSize(Raw); // GOOD: you size, you allocate, FileData = malloc(Size);
+// the API only transforms a pointer ProcessFile(Raw, FileData); Thing =
+MakeThingFromData(FileData); ``` **Spout against the ladder.** The façade passes
+the analogous rungs cleanly — one-shot `Circuit::run` (rung A-equivalent, but
+*good* because it is decomposable), programmatic `CircuitDef…solve` (finer
+construction), `solve_with` hints, and additive result inspection (`area`,
+`wirelength`, `violations`, `lvs_clean`). Each step's code is a strict superset
+of the previous step's. The **one cliff** is inspecting placement *before*
+routing, which today forces dropping to `spout_core` and re-deriving hidden
+plumbing (`solve_summary.baseline_used`, lib.rs:236). The staged, typestate-safe
+chain in [spout-api-design.md](spout-api-design.md) §X-A closes it. --- ## Part
+4 — Compliance Summary by Axis | Axis | Shorthand | Verdict | One-line reason |
+| --- | --- | --- | --- | | Granularity | `A or BC` | **Strong** | 3-tier
+ladder; `run` decomposes into 3 oracles; middle tier not yet api2-native (§X-A).
+| | Redundancy | `A or B` | **Good** | Mostly "diagonal" aliases;
+`Symmetric`≡`Matching` collision and triple first-subckt promotion to resolve
+(§X-F). | | Coupling | `A implies B` | **Good inputs, leaky seam** | `impl
+Into<PortRef
+  >` / `Length` decouple inputs; `spout_core::Axis` and 3 unused re-exported
+  engine crates leak (§X-B, §X-F). | | Retention | `A equals B` | **Ideal** |
+  Pure immediate mode; nothing to synchronize (IV-D). | | Flow control | `A
+  invokes B` | **Ideal** | Caller always drives; no IoC, trait, or inheritance
+  requirement (IV-E). | | *Transparency (checklist)* | — | **Defect** | 13/22
+  constraints silently dropped with false acceptance; dead hint methods (§V,
+  §X-E). | **Bottom line.** Spout's API already satisfies the two axes Casey
+  weights as absolute — retention and flow control — *vacuously*, the strongest
+  form of compliance, and is strong on granularity. The remaining gaps are the
+  two failed verbatim checklist rules (5 and 7), each closable in a single
+  function. By Casey's own measure — the surface that costs the integrator the
+  least work to adopt, refine, and escape from — this is the right API for
+  Spout, and the short list in §X is exactly what makes it pass cleanly. --- ###
+  References [1] C. Muratori, *Designing and Evaluating Reusable Components*,
+  GameTech 2004 — [talk/slides/audio](https://caseymuratori.com/blog_0024),
+  [visual
+  transcript](https://github.com/jceipek/designing-reusable-components/blob/master/ReusableComponents/ReusableComponents.md),
+  [checklist
+  notes](https://gist.github.com/vsapsai/6f524c5095a7ae647f1746c762954f9f). C.
+  Hecker, [*API Design*](https://chrishecker.com/API_Design) — shorthand and
+  tradeoff names; "diagonal, not orthogonal."
+</PortRef>

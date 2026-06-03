@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Installation — Philis</title>
+    <link rel="stylesheet" href="../style.css" />
+    <link rel="icon" type="image/svg+xml" href="../mascot.svg" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../index.html">
+        <img src="../mascot.svg" alt="Philis mascot" />
+        Phil<span class="accent">is</span>
+      </a>
+      <nav class="top-nav">
+        <a href="../index.html">Home</a>
+        <a href="getting-started.html" class="active">Usage</a>
+        <a href="../Developer/api/index.html">Developer</a>
+        <a href="https://github.com/OmarSiwy/Philis">GitHub</a>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <h4>Usage</h4>
+        <ul>
+          <li><a href="getting-started.html">Getting Started</a></li>
+          <li><a href="installation.html" class="active">Installation</a></li>
+          <li><a href="first-layout.html">Your First Layout</a></li>
+        </ul>
+        <h4>Developer</h4>
+        <ul>
+          <li><a href="../Developer/api/index.html">API</a></li>
+          <li><a href="../Developer/place/index.html">Place</a></li>
+          <li><a href="../Developer/route/index.html">Route</a></li>
+          <li><a href="../Developer/constraints/index.html">Constraints</a></li>
+        </ul>
+      </aside>
+
+      <main class="content">
+        <p class="breadcrumb">
+          <a href="../index.html">Home</a> / Usage / Installation
+        </p>
+
+        <h1>Installation</h1>
+        <p>Placeholder page — replace with real installation instructions.</p>
+
+        <h2>Requirements</h2>
+        <table>
+          <tr>
+            <th>Dependency</th>
+            <th>Version</th>
+          </tr>
+          <tr>
+            <td>Python</td>
+            <td>3.10+</td>
+          </tr>
+          <tr>
+            <td>ciel (PDK manager)</td>
+            <td>latest</td>
+          </tr>
+        </table>
+
+        <h2>From PyPI</h2>
+        <pre><code>pip install philis</code></pre>
+
+        <h2>From source</h2>
+        <pre><code>git clone https://github.com/OmarSiwy/Philis
+cd philis
+pip install -e .</code></pre>
+      </main>
+    </div>
+
+    <footer class="site-footer">Philis &middot; Analog Layout Engine</footer>
+  </body>
+</html>

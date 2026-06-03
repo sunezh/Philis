@@ -1,0 +1,408 @@
+/* ============================================================================
+   Philis — Tokyo Night documentation theme
+   ----------------------------------------------------------------------------
+   This is the TOP-LEVEL stylesheet. Every page in the docs links to this one
+   file via a relative path so the theme "trickles down" to all pages:
+
+       docs/index.html                       ->  href="style.css"
+       docs/Usage/*.html                     ->  href="../style.css"
+       docs/Developer/<section>/*.html       ->  href="../../style.css"
+
+   To restyle the entire site, edit only this file.
+   ========================================================================== */
+
+/* ---- Tokyo Night palette --------------------------------------------------*/
+:root {
+  --bg: #1a1b26; /* page background            */
+  --bg-dark: #16161e; /* header / sidebar / footer  */
+  --bg-highlight: #24283b; /* cards, code blocks         */
+  --bg-inline: #292e42; /* inline code                */
+  --border: #2f344d;
+
+  --fg: #c0caf5; /* body text                  */
+  --fg-muted: #a9b1d6;
+  --comment: #565f89; /* dim text                   */
+
+  --blue: #7aa2f7; /* links / primary accent     */
+  --cyan: #7dcfff;
+  --green: #9ece6a;
+  --magenta: #bb9af7;
+  --red: #f7768e;
+  --orange: #ff9e64;
+  --yellow: #e0af68;
+
+  --radius: 10px;
+  --maxw: 1180px;
+  --sidebar-w: 260px;
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono:
+    "JetBrains Mono", "Fira Code", ui-monospace, "SFMono-Regular", Menlo,
+    Consolas, monospace;
+}
+
+/* ---- Base -----------------------------------------------------------------*/
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--blue);
+  text-decoration: none;
+}
+a:hover {
+  color: var(--cyan);
+  text-decoration: underline;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  line-height: 1.25;
+  font-weight: 650;
+  color: #d6def7;
+}
+h1 {
+  font-size: 2.1rem;
+  margin: 0 0 0.5rem;
+}
+h2 {
+  font-size: 1.5rem;
+  margin: 2.4rem 0 1rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--border);
+}
+h3 {
+  font-size: 1.2rem;
+  margin: 1.8rem 0 0.6rem;
+  color: var(--cyan);
+}
+
+p {
+  margin: 0 0 1rem;
+}
+
+hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2rem 0;
+}
+
+/* ---- Header / top nav -----------------------------------------------------*/
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  padding: 0 1.5rem;
+  height: 60px;
+  background: rgba(22, 22, 30, 0.85);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-weight: 700;
+  font-size: 1.15rem;
+  color: #fff;
+}
+.brand:hover {
+  text-decoration: none;
+}
+.brand img {
+  width: 30px;
+  height: 30px;
+}
+.brand .accent {
+  color: var(--magenta);
+}
+
+.top-nav {
+  display: flex;
+  gap: 1.5rem;
+  margin-left: auto;
+}
+.top-nav a {
+  color: var(--fg-muted);
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+.top-nav a:hover,
+.top-nav a.active {
+  color: var(--blue);
+  text-decoration: none;
+}
+
+/* ---- Layout: sidebar + content -------------------------------------------*/
+.layout {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  gap: 0;
+  max-width: var(--maxw);
+  margin: 0 auto;
+}
+
+.sidebar {
+  align-self: start;
+  position: sticky;
+  top: 60px;
+  height: calc(100vh - 60px);
+  overflow-y: auto;
+  padding: 1.75rem 1.25rem;
+  border-right: 1px solid var(--border);
+}
+.sidebar h4 {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.72rem;
+  color: var(--comment);
+  margin: 1.5rem 0 0.5rem;
+}
+.sidebar h4:first-child {
+  margin-top: 0;
+}
+.sidebar ul {
+  list-style: none;
+  margin: 0 0 0.5rem;
+  padding: 0;
+}
+.sidebar li {
+  margin: 0.1rem 0;
+}
+.sidebar a {
+  display: block;
+  padding: 0.32rem 0.6rem;
+  border-radius: 6px;
+  color: var(--fg-muted);
+  font-size: 0.92rem;
+}
+.sidebar a:hover {
+  background: var(--bg-highlight);
+  text-decoration: none;
+}
+.sidebar a.active {
+  background: var(--bg-inline);
+  color: var(--blue);
+  font-weight: 600;
+}
+
+.content {
+  padding: 2.5rem 3rem;
+  min-width: 0;
+}
+.content > :first-child {
+  margin-top: 0;
+}
+
+/* Breadcrumb shown at the top of inner pages */
+.breadcrumb {
+  font-size: 0.85rem;
+  color: var(--comment);
+  margin-bottom: 1.5rem;
+}
+.breadcrumb a {
+  color: var(--comment);
+}
+.breadcrumb a:hover {
+  color: var(--blue);
+}
+
+/* ---- Code -----------------------------------------------------------------*/
+code,
+pre,
+kbd {
+  font-family: var(--font-mono);
+}
+
+:not(pre) > code {
+  background: var(--bg-inline);
+  color: var(--cyan);
+  padding: 0.15em 0.4em;
+  border-radius: 5px;
+  font-size: 0.88em;
+}
+
+pre {
+  background: var(--bg-highlight);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.1rem 1.25rem;
+  overflow-x: auto;
+  line-height: 1.55;
+  font-size: 0.9rem;
+}
+pre code {
+  color: var(--fg);
+}
+
+/* ---- Hero (landing page) --------------------------------------------------*/
+.hero {
+  text-align: center;
+  padding: 4.5rem 1.5rem 3.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.hero img {
+  width: 130px;
+  height: 130px;
+  margin-bottom: 1.25rem;
+}
+.hero h1 {
+  font-size: 3rem;
+  background: linear-gradient(90deg, var(--blue), var(--magenta));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.hero .tagline {
+  font-size: 1.2rem;
+  color: var(--fg-muted);
+  max-width: 640px;
+  margin: 0.5rem auto 2rem;
+}
+
+.btn-row {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.btn {
+  display: inline-block;
+  padding: 0.7rem 1.5rem;
+  border-radius: 8px;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+.btn:hover {
+  text-decoration: none;
+  transform: translateY(-1px);
+}
+.btn-primary {
+  background: var(--blue);
+  color: var(--bg-dark);
+}
+.btn-primary:hover {
+  background: var(--cyan);
+  color: var(--bg-dark);
+}
+.btn-ghost {
+  border-color: var(--border);
+  color: var(--fg);
+}
+.btn-ghost:hover {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+/* ---- Feature cards --------------------------------------------------------*/
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1.25rem;
+  max-width: var(--maxw);
+  margin: 3rem auto;
+  padding: 0 1.5rem;
+}
+.card {
+  background: var(--bg-highlight);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+  transition:
+    border-color 0.15s,
+    transform 0.15s;
+}
+.card:hover {
+  border-color: var(--blue);
+  transform: translateY(-2px);
+}
+.card h3 {
+  margin-top: 0;
+  color: var(--magenta);
+}
+.card p {
+  color: var(--fg-muted);
+  margin-bottom: 0;
+}
+
+/* ---- Callout / admonition -------------------------------------------------*/
+.note {
+  border-left: 4px solid var(--blue);
+  background: var(--bg-highlight);
+  border-radius: 0 8px 8px 0;
+  padding: 0.9rem 1.1rem;
+  margin: 1.5rem 0;
+}
+.note.warn {
+  border-left-color: var(--orange);
+}
+.note.danger {
+  border-left-color: var(--red);
+}
+.note strong {
+  color: var(--cyan);
+}
+
+/* ---- Tables ---------------------------------------------------------------*/
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1.5rem 0;
+}
+th,
+td {
+  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+th {
+  background: var(--bg-highlight);
+  color: var(--cyan);
+}
+
+/* ---- Footer ---------------------------------------------------------------*/
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 2rem 1.5rem;
+  text-align: center;
+  color: var(--comment);
+  font-size: 0.9rem;
+}
+
+/* ---- Responsive -----------------------------------------------------------*/
+@media (max-width: 860px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+  .sidebar {
+    position: static;
+    height: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .content {
+    padding: 1.75rem 1.25rem;
+  }
+  .top-nav {
+    gap: 1rem;
+  }
+}

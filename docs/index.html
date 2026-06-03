@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Philis — Analog Layout Engine</title>
+    <meta
+      name="description"
+      content="Philis is an analog layout engine with automated place and route that emits both Python and GDS."
+    />
+    <!-- Top-level stylesheet. Pages in subfolders link to it with ../ or ../../ -->
+    <link rel="stylesheet" href="style.css" />
+    <link rel="icon" type="image/svg+xml" href="mascot.svg" />
+  </head>
+  <body>
+    <!-- ====================== Top navigation ====================== -->
+    <header class="site-header">
+      <a class="brand" href="index.html">
+        <img src="mascot.svg" alt="Philis mascot" />
+        Phil<span class="accent">is</span>
+      </a>
+      <nav class="top-nav">
+        <a href="index.html" class="active">Home</a>
+        <a href="Usage/getting-started.html">Usage</a>
+        <a href="Developer/api/index.html">Developer</a>
+        <a href="https://github.com/OmarSiwy/Philis">GitHub</a>
+      </nav>
+    </header>
+
+    <!-- ====================== Hero ====================== -->
+    <section class="hero">
+      <img src="mascot.svg" alt="Philis mascot" />
+      <h1>Philis</h1>
+      <p class="tagline">
+        The analog layout engine. Build circuits with a simple API and let
+        <strong>Automated Place &amp; Route</strong> emit the Python that wrote
+        it, alongside the GDS.
+      </p>
+      <div class="btn-row">
+        <a class="btn btn-primary" href="Usage/getting-started.html"
+          >Get Started</a
+        >
+        <a class="btn btn-ghost" href="Developer/api/index.html"
+          >API Reference</a
+        >
+      </div>
+    </section>
+
+    <!-- ====================== Feature cards ====================== -->
+    <section class="cards">
+      <div class="card">
+        <h3>Simple API</h3>
+        <p>
+          Describe circuits declaratively in Python — no proprietary scripting,
+          no GUI clicking.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Automated P&amp;R</h3>
+        <p>
+          Placement and routing solved for you, with constraints you control
+          when you need to.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Reproducible Output</h3>
+        <p>
+          Every layout dumps the exact Python used to build it, alongside a
+          clean GDS file.
+        </p>
+      </div>
+      <div class="card">
+        <h3>PDK Aware</h3>
+        <p>
+          Configured through technology files — ships ready for ciel PDKs such
+          as sky130.
+        </p>
+      </div>
+    </section>
+
+    <!-- ====================== Quick start ====================== -->
+    <div class="layout">
+      <main class="content" style="grid-column: 1 / -1">
+        <h2>Quick Start</h2>
+        <p>
+          Install Philis and a PDK, then describe and route your first cell.
+        </p>
+        <pre><code>pip install philis ciel
+ciel enable --technology sky130</code></pre>
+
+        <div class="note">
+          <strong>Tip:</strong> New here? The
+          <a href="Usage/getting-started.html">Getting Started</a> guide walks
+          through a full place-and-route example end to end.
+        </div>
+
+        <h2>Where to go next</h2>
+        <table>
+          <tr>
+            <th>I want to…</th>
+            <th>Go to</th>
+          </tr>
+          <tr>
+            <td>Install &amp; build my first layout</td>
+            <td>
+              <a href="Usage/getting-started.html">Usage → Getting Started</a>
+            </td>
+          </tr>
+          <tr>
+            <td>Look up classes &amp; functions</td>
+            <td><a href="Developer/api/index.html">Developer → API</a></td>
+          </tr>
+          <tr>
+            <td>Understand the placement engine</td>
+            <td><a href="Developer/place/index.html">Developer → Place</a></td>
+          </tr>
+          <tr>
+            <td>Understand the router</td>
+            <td><a href="Developer/route/index.html">Developer → Route</a></td>
+          </tr>
+          <tr>
+            <td>Define design constraints</td>
+            <td>
+              <a href="Developer/constraints/index.html"
+                >Developer → Constraints</a
+              >
+            </td>
+          </tr>
+        </table>
+      </main>
+    </div>
+
+    <!-- ====================== Footer ====================== -->
+    <footer class="site-footer">
+      Philis &middot; Analog Layout Engine &middot; Built with the Tokyo Night
+      theme
+    </footer>
+  </body>
+</html>

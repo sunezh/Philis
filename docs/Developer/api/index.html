@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>API Reference — Philis</title>
+    <!-- Two levels deep: stylesheet lives two directories up -->
+    <link rel="stylesheet" href="../../style.css" />
+    <link rel="icon" type="image/svg+xml" href="../../mascot.svg" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../../index.html">
+        <img src="../../mascot.svg" alt="Philis mascot" />
+        Phil<span class="accent">is</span>
+      </a>
+      <nav class="top-nav">
+        <a href="../../index.html">Home</a>
+        <a href="../../Usage/getting-started.html">Usage</a>
+        <a href="index.html" class="active">Developer</a>
+        <a href="https://github.com/OmarSiwy/Philis">GitHub</a>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <h4>Developer</h4>
+        <ul>
+          <li><a href="../api/index.html" class="active">API</a></li>
+          <li><a href="../place/index.html">Place</a></li>
+          <li><a href="../route/index.html">Route</a></li>
+          <li><a href="../constraints/index.html">Constraints</a></li>
+        </ul>
+        <h4>Usage</h4>
+        <ul>
+          <li>
+            <a href="../../Usage/getting-started.html">Getting Started</a>
+          </li>
+          <li><a href="../../Usage/installation.html">Installation</a></li>
+        </ul>
+      </aside>
+
+      <main class="content">
+        <p class="breadcrumb">
+          <a href="../../index.html">Home</a> / Developer / API
+        </p>
+
+        <h1>API Reference</h1>
+        <p>
+          Placeholder page. Document public classes and functions here — one
+          <code>&lt;h2&gt;</code> per symbol works well.
+        </p>
+
+        <h2>class <code>Design</code></h2>
+        <p>The top-level container for a circuit and its layout.</p>
+        <pre><code>Design(name: str, technology: str | None = None)</code></pre>
+
+        <h3>Methods</h3>
+        <table>
+          <tr>
+            <th>Method</th>
+            <th>Description</th>
+          </tr>
+          <tr>
+            <td><code>add_device(...)</code></td>
+            <td>Add a primitive device.</td>
+          </tr>
+          <tr>
+            <td><code>connect(...)</code></td>
+            <td>Create a net between pins.</td>
+          </tr>
+          <tr>
+            <td><code>place_and_route()</code></td>
+            <td>Run automated P&amp;R.</td>
+          </tr>
+          <tr>
+            <td><code>write_gds(path)</code></td>
+            <td>Emit the GDS file.</td>
+          </tr>
+        </table>
+      </main>
+    </div>
+
+    <footer class="site-footer">Philis &middot; Analog Layout Engine</footer>
+  </body>
+</html>
