@@ -1,0 +1,16 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Python / maturin
+.venv*
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.so
+dist/
+*.egg-info/
+
+# Nix
+result
+result-*

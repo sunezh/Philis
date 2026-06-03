@@ -1,0 +1,13 @@
+[workspace]
+members = [
+    "crates/api",
+    "crates/utility",
+    "bench",
+]
+resolver = "2"
+
+[workspace.dependencies]
+
+[profile.release]
+lto = true
+codegen-units = 1

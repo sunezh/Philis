@@ -1,0 +1,22 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "Philis"
+version = "1.0.0"
+description = "Analog place & route engine"
+requires-python = ">=3.9"
+license = "MIT"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+
+[tool.maturin]
+manifest-path = "crates/api/Cargo.toml"
+module-name = "philis"
+features = ["extension-module"]
+
+[tool.pytest.ini_options]
+testpaths = ["crates/api/pytest"]
