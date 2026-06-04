@@ -15,9 +15,36 @@ crate-type = ["rlib", "cdylib"]
 name = "philis"
 path = "src/main.rs"
 
+# Integration tests live in `test/` (not the default `tests/`) and are listed
+# explicitly. Each file exercises one slice of the public surface; together they
+# touch every public function — see `STUBS.md` for what is real vs. stubbed.
 [[test]]
 name = "integration"
 path = "test/integration.rs"
+
+[[test]]
+name = "api_smoke"
+path = "test/api_smoke.rs"
+
+[[test]]
+name = "builder_api"
+path = "test/builder_api.rs"
+
+[[test]]
+name = "units_ports"
+path = "test/units_ports.rs"
+
+[[test]]
+name = "constraints_axis"
+path = "test/constraints_axis.rs"
+
+[[test]]
+name = "layout_results"
+path = "test/layout_results.rs"
+
+[[test]]
+name = "verify_io"
+path = "test/verify_io.rs"
 
 [features]
 default = []
@@ -25,5 +52,4 @@ python = ["dep:pyo3"]
 extension-module = ["python", "pyo3/extension-module"]
 
 [dependencies]
-utility = { path = "../utility" }
 pyo3 = { version = "0.23", optional = true, features = ["abi3-py39"] }

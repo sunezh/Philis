@@ -1,0 +1,13 @@
+[package]
+name = "philis-solver"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "SAT/ILP/SMT solver abstraction for the Philis analog layout engine"
+license = "MIT"
+
+[lib]
+name = "philis_solver"
+
+[features]
+default = []

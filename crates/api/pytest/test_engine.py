@@ -1,4 +1,4 @@
-"""Example tests for the `philis` Python extension module.
+"""Tests for the `philis` Python extension module — the quickstart free function.
 
 Build the module into the active environment before running these, e.g.:
 
@@ -6,7 +6,8 @@ Build the module into the active environment before running these, e.g.:
     pytest                                         # runs from the repo root
 
 `pyproject.toml` already points pytest at this directory and tells maturin to
-build with the `extension-module` feature.
+build with the `extension-module` feature. The richer object surface (Pdk,
+Circuit, RunResult) is exercised in `test_api.py`.
 """
 
 import pytest

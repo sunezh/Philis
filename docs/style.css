@@ -1,8 +1,7 @@
 /* ============================================================================
-   Philis — Tokyo Night documentation theme
+   Philis — UWASIC-inspired documentation theme
    ----------------------------------------------------------------------------
-   This is the TOP-LEVEL stylesheet. Every page in the docs links to this one
-   file via a relative path so the theme "trickles down" to all pages:
+   Charcoal-dark backgrounds with red accent, matching the UWASIC chip logo.
 
        docs/index.html                       ->  href="style.css"
        docs/Usage/*.html                     ->  href="../style.css"
@@ -11,25 +10,28 @@
    To restyle the entire site, edit only this file.
    ========================================================================== */
 
-/* ---- Tokyo Night palette --------------------------------------------------*/
+/* ---- UWASIC palette -------------------------------------------------------*/
 :root {
-  --bg: #1a1b26; /* page background            */
-  --bg-dark: #16161e; /* header / sidebar / footer  */
-  --bg-highlight: #24283b; /* cards, code blocks         */
-  --bg-inline: #292e42; /* inline code                */
-  --border: #2f344d;
+  --bg: #1a1a1e;
+  --bg-dark: #141417;
+  --bg-highlight: #242428;
+  --bg-inline: #2d2d33;
+  --border: #36363e;
 
-  --fg: #c0caf5; /* body text                  */
-  --fg-muted: #a9b1d6;
-  --comment: #565f89; /* dim text                   */
+  --fg: #cdcdd4;
+  --fg-muted: #9d9da6;
+  --comment: #5a5a64;
 
-  --blue: #7aa2f7; /* links / primary accent     */
-  --cyan: #7dcfff;
-  --green: #9ece6a;
-  --magenta: #bb9af7;
-  --red: #f7768e;
-  --orange: #ff9e64;
-  --yellow: #e0af68;
+  --accent: #dc2626;
+  --accent-hover: #ef4444;
+  --accent-dim: #991b1b;
+
+  --blue: #7a9ec7;
+  --cyan: #8cb4bc;
+  --green: #6aab73;
+  --orange: #d49a5a;
+  --yellow: #c9a84c;
+  --red: #dc2626;
 
   --radius: 10px;
   --maxw: 1180px;
@@ -60,11 +62,11 @@ body {
 }
 
 a {
-  color: var(--blue);
+  color: var(--accent);
   text-decoration: none;
 }
 a:hover {
-  color: var(--cyan);
+  color: var(--accent-hover);
   text-decoration: underline;
 }
 
@@ -74,7 +76,7 @@ h3,
 h4 {
   line-height: 1.25;
   font-weight: 650;
-  color: #d6def7;
+  color: #e2e2e8;
 }
 h1 {
   font-size: 2.1rem;
@@ -89,7 +91,7 @@ h2 {
 h3 {
   font-size: 1.2rem;
   margin: 1.8rem 0 0.6rem;
-  color: var(--cyan);
+  color: var(--accent);
 }
 
 p {
@@ -112,7 +114,7 @@ hr {
   gap: 2rem;
   padding: 0 1.5rem;
   height: 60px;
-  background: rgba(22, 22, 30, 0.85);
+  background: rgba(20, 20, 23, 0.85);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--border);
 }
@@ -129,11 +131,11 @@ hr {
   text-decoration: none;
 }
 .brand img {
-  width: 30px;
+  width: auto;
   height: 30px;
 }
 .brand .accent {
-  color: var(--magenta);
+  color: var(--accent);
 }
 
 .top-nav {
@@ -148,7 +150,7 @@ hr {
 }
 .top-nav a:hover,
 .top-nav a.active {
-  color: var(--blue);
+  color: var(--accent);
   text-decoration: none;
 }
 
@@ -201,7 +203,7 @@ hr {
 }
 .sidebar a.active {
   background: var(--bg-inline);
-  color: var(--blue);
+  color: var(--accent);
   font-weight: 600;
 }
 
@@ -223,7 +225,7 @@ hr {
   color: var(--comment);
 }
 .breadcrumb a:hover {
-  color: var(--blue);
+  color: var(--accent);
 }
 
 /* ---- Code -----------------------------------------------------------------*/
@@ -261,13 +263,13 @@ pre code {
   border-bottom: 1px solid var(--border);
 }
 .hero img {
-  width: 130px;
+  width: auto;
   height: 130px;
   margin-bottom: 1.25rem;
 }
 .hero h1 {
   font-size: 3rem;
-  background: linear-gradient(90deg, var(--blue), var(--magenta));
+  background: linear-gradient(90deg, var(--accent), #ff6b6b);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
@@ -297,20 +299,20 @@ pre code {
   transform: translateY(-1px);
 }
 .btn-primary {
-  background: var(--blue);
-  color: var(--bg-dark);
+  background: var(--accent);
+  color: #fff;
 }
 .btn-primary:hover {
-  background: var(--cyan);
-  color: var(--bg-dark);
+  background: var(--accent-hover);
+  color: #fff;
 }
 .btn-ghost {
   border-color: var(--border);
   color: var(--fg);
 }
 .btn-ghost:hover {
-  border-color: var(--blue);
-  color: var(--blue);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 /* ---- Feature cards --------------------------------------------------------*/
@@ -332,12 +334,12 @@ pre code {
     transform 0.15s;
 }
 .card:hover {
-  border-color: var(--blue);
+  border-color: var(--accent);
   transform: translateY(-2px);
 }
 .card h3 {
   margin-top: 0;
-  color: var(--magenta);
+  color: var(--accent);
 }
 .card p {
   color: var(--fg-muted);
@@ -346,7 +348,7 @@ pre code {
 
 /* ---- Callout / admonition -------------------------------------------------*/
 .note {
-  border-left: 4px solid var(--blue);
+  border-left: 4px solid var(--accent);
   background: var(--bg-highlight);
   border-radius: 0 8px 8px 0;
   padding: 0.9rem 1.1rem;
@@ -359,7 +361,7 @@ pre code {
   border-left-color: var(--red);
 }
 .note strong {
-  color: var(--cyan);
+  color: #e2e2e8;
 }
 
 /* ---- Tables ---------------------------------------------------------------*/
@@ -376,7 +378,52 @@ td {
 }
 th {
   background: var(--bg-highlight);
-  color: var(--cyan);
+  color: var(--accent);
+}
+
+/* ---- Expandable alternative-exploration blocks ----------------------------*/
+details {
+  background: var(--bg-highlight);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin: 1.5rem 0;
+  overflow: hidden;
+}
+details[open] {
+  border-color: var(--accent);
+}
+details summary {
+  padding: 0.8rem 1.1rem;
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--accent);
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  user-select: none;
+}
+details summary::before {
+  content: "\25b6";
+  font-size: 0.7em;
+  transition: transform 0.2s;
+  flex-shrink: 0;
+}
+details[open] summary::before {
+  transform: rotate(90deg);
+}
+details summary::-webkit-details-marker {
+  display: none;
+}
+details summary:hover {
+  background: var(--bg-inline);
+}
+details .details-body {
+  padding: 0 1.1rem 1rem;
+  border-top: 1px solid var(--border);
+}
+details .details-body > :first-child {
+  margin-top: 1rem;
 }
 
 /* ---- Footer ---------------------------------------------------------------*/

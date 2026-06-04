@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Chip body (rotated square) -->
+  <rect x="14" y="14" width="36" height="36" rx="3" fill="#2a2a2e" stroke="#555" stroke-width="1.5" transform="rotate(45 32 32)"/>
+  <!-- Pins - top -->
+  <rect x="24" y="4" width="3" height="10" rx="1" fill="#888"/>
+  <rect x="30.5" y="4" width="3" height="10" rx="1" fill="#888"/>
+  <rect x="37" y="4" width="3" height="10" rx="1" fill="#888"/>
+  <!-- Pins - bottom -->
+  <rect x="24" y="50" width="3" height="10" rx="1" fill="#888"/>
+  <rect x="30.5" y="50" width="3" height="10" rx="1" fill="#888"/>
+  <rect x="37" y="50" width="3" height="10" rx="1" fill="#888"/>
+  <!-- Pins - left -->
+  <rect x="4" y="24" width="10" height="3" rx="1" fill="#888"/>
+  <rect x="4" y="30.5" width="10" height="3" rx="1" fill="#888"/>
+  <rect x="4" y="37" width="10" height="3" rx="1" fill="#888"/>
+  <!-- Pins - right -->
+  <rect x="50" y="24" width="10" height="3" rx="1" fill="#888"/>
+  <rect x="50" y="30.5" width="10" height="3" rx="1" fill="#888"/>
+  <rect x="50" y="37" width="10" height="3" rx="1" fill="#888"/>
+  <!-- Inner die -->
+  <rect x="22" y="22" width="20" height="20" rx="1" fill="#1a1a1e" stroke="#444" stroke-width="0.75" transform="rotate(45 32 32)"/>
+  <!-- P letter -->
+  <text x="32" y="37" text-anchor="middle" font-family="Arial,sans-serif" font-weight="bold" font-size="16" fill="#dc2626">P</text>
+</svg>

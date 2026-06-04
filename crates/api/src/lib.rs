@@ -1,16 +1,113 @@
-//! Philis — analog place & route engine.
+//! Philis — the public façade for the analog place & route engine.
 //!
-//! This crate is compiled into one of three forms, selected at build time:
+//! A thin, **gradually-tiered** surface over Philis's stages, designed against
+//! Casey Muratori's reusable-component criteria
+//! (`docs/Developer/api/Philis-Api-Considerations.html`).
 //!
-//! * **Rust library (default):** the `rlib` is linked directly by `bench/` and
-//!   by the `philis` binary. No PyO3, no Python — `cargo build` is pure Rust.
-//! * **Python extension (`--features extension-module`):** maturin compiles the
-//!   `cdylib` with the PyO3 bindings below and packages it as `philis.so`.
-//! * **Executable (`--bin philis`):** a thin CLI wrapper, see `main.rs`.
+//! ## The tiers (each a strict superset of the one below)
+//! * **Foundation — [`io`]:** dependency-free readers/writers — SPICE
+//!   ([`io::spice`]), GDSII ([`io::gds`], the gdstk-equivalent surface), and the
+//!   PDK reader ([`io::pdk`], JSON/TOML).
+//! * **Engine — [`core`]:** everything constraint/placement/routing-dependent —
+//!   the [`Constraint`] taxonomy, [`Objective`]/[`Strategy`]/[`HintBuilder`], and
+//!   the raw stage oracles. Wired in behind whichever tier drives it.
+//! * **Flow — [`flow`]:** the one-shot [`Circuit::run`] and the staged
+//!   [`Circuit::analyze`] → [`Constraints::place`] → [`Placed::route`].
+//! * **Builder — [`builder`]:** construct a circuit in Rust and [`BuiltCircuit::solve`].
+//! * **Verification — [`verify`]:** DRC/LVS/PEX/ERC, callable on any manual tier
+//!   and on the automation result.
 //!
-//! The engine logic lives here once; each "face" is just a different entry point.
+//! ## Design properties
+//! Low coupling (the façade owns its [`Axis`] and result types), immediate mode
+//! (nothing retained across calls), caller-driven (configuration closures, no
+//! callbacks), and honest — anything unimplemented is a documented STUB
+//! (`crates/api/STUBS.md`), never a silently ignored input.
 
-/// A placed cell: a name and its integer coordinates on the grid.
+pub mod builder;
+pub mod core;
+pub mod flow;
+pub mod io;
+pub mod layout;
+pub mod port;
+pub mod units;
+pub mod verify;
+
+// Flat re-exports — the names a caller actually reaches for.
+pub use builder::{
+    ApiBuildError, BuildError, BuildResult, BuildWarning, BuiltCircuit, CircuitDef, DeviceBuilder,
+    NetBuilder,
+};
+pub use core::{
+    constraint_input, evaluate_gate_acceptance, run_constraints, run_placement, run_routing,
+    AcceptanceGate, ConflictClass, Constraint, ConstraintResult, ConstraintRunInput,
+    DegradedConfidenceCause, FlowResult, GateEvaluation, GateStatus, HintBuilder, IntentClass,
+    Objective, PlacementCertificate, PlacementConflict, PlacementResult, PlacementRunInput,
+    RouterHandoffWitness, RoutingResult, RoutingRunInput, RunConfig, Strategy,
+    ACCEPTANCE_GATE_ORDER,
+};
+pub use flow::{Circuit, Constraints, Placed};
+pub use io::gds::Gds;
+pub use io::pdk::Pdk;
+pub use io::spice::SpiceNetlist;
+pub use layout::{Layout, PlacedInstance, Violation};
+pub use port::{
+    port_ref_from_name, valid_port_names, BjtPort, DeviceKind, MosfetPort, PassivePort, PortRef,
+};
+pub use core::{
+    AccessConfidence, Coverage, DiagnosticClass, DiagnosticScope, Evidence, HardVector, NetClass,
+    PdkState, RouteCertificate, RouteDiagnostic, RouteQuality, RuleCoverageReport,
+};
+pub use units::{parse_axis, Axis, Coord, Distance, Length};
+pub use verify::{CheckKind, CheckReport};
+
+// Oracle vocabulary, flat and under `next::` (mirrors the eventual split into
+// separate engine crates).
+pub use core::{constraints, placer, router};
+pub mod next {
+    pub use crate::core::{constraints, placer, router};
+}
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+/// The fallible flow's error type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ApiError {
+    /// SPICE parse failure.
+    Spice(String),
+    /// PDK load/parse failure.
+    Pdk(String),
+    /// I/O failure (path in the message).
+    Io(String),
+    /// `select_subckt` named a subcircuit that does not exist.
+    SubcktNotFound(String),
+    /// The netlist has no devices to place.
+    EmptyNetlist,
+    /// `Pdk::from_env` was given an env var that is unset.
+    MissingPdkPathEnv(String),
+}
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ApiError::Spice(m) => write!(f, "spice parse error: {m}"),
+            ApiError::Pdk(m) => write!(f, "pdk error: {m}"),
+            ApiError::Io(m) => write!(f, "io error: {m}"),
+            ApiError::SubcktNotFound(n) => write!(f, "subckt not found: {n}"),
+            ApiError::EmptyNetlist => write!(f, "empty netlist: nothing to place"),
+            ApiError::MissingPdkPathEnv(v) => write!(f, "env var not set: {v}"),
+        }
+    }
+}
+impl std::error::Error for ApiError {}
+
+// ---------------------------------------------------------------------------
+// Tier 0 quickstart — the simplest possible real path.
+// ---------------------------------------------------------------------------
+
+/// A placed cell: a name and its integer grid coordinates.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cell {
     pub name: String,
@@ -18,8 +115,9 @@ pub struct Cell {
     pub y: i64,
 }
 
-/// Parse a netlist: one whitespace-separated `name x y` triple per line.
-/// Blank lines and lines beginning with `#` are ignored.
+/// Parse a trivial netlist: one whitespace-separated `name x y` triple per line.
+/// Blank lines and lines beginning with `#` are ignored. This is the genuinely
+/// working quickstart path; the SPICE/builder paths are the real surface.
 pub fn parse(input: &str) -> Result<Vec<Cell>, String> {
     let mut cells = Vec::new();
     for (lineno, raw) in input.lines().enumerate() {
@@ -48,21 +146,20 @@ pub fn parse(input: &str) -> Result<Vec<Cell>, String> {
     Ok(cells)
 }
 
-/// Run the (placeholder) place & route pass and return a one-line summary.
-///
-/// Computes the bounding box and half-perimeter wirelength (HPWL) of the placed
-/// cells — a standard first-order estimate of routing cost.
+/// Run the quickstart pass: bounding box + half-perimeter wirelength (HPWL).
 pub fn place_and_route(input: &str) -> Result<String, String> {
     let cells = parse(input)?;
     if cells.is_empty() {
         return Ok("placed 0 cells".to_string());
     }
-
-    // Bounding box via the shared `utility` generics — one pass per axis, no
-    // manual min/max bookkeeping here.
-    let (min_x, max_x) = utility::extent!(cells.iter(), |c| c.x).expect("non-empty");
-    let (min_y, max_y) = utility::extent!(cells.iter(), |c| c.y).expect("non-empty");
-
+    let (mut min_x, mut max_x) = (cells[0].x, cells[0].x);
+    let (mut min_y, mut max_y) = (cells[0].y, cells[0].y);
+    for c in &cells[1..] {
+        min_x = min_x.min(c.x);
+        max_x = max_x.max(c.x);
+        min_y = min_y.min(c.y);
+        max_y = max_y.max(c.y);
+    }
     let (w, h) = (max_x - min_x, max_y - min_y);
     Ok(format!(
         "placed {} cells, bbox {}x{}, hpwl {}",
@@ -73,31 +170,8 @@ pub fn place_and_route(input: &str) -> Result<String, String> {
     ))
 }
 
-// ---------------------------------------------------------------------------
-// Python bindings — compiled only when the `python` feature is enabled, i.e.
-// when maturin builds with `--features extension-module`. A plain `cargo build`
-// never sees this module.
-// ---------------------------------------------------------------------------
 #[cfg(feature = "python")]
-mod python {
-    use pyo3::exceptions::PyValueError;
-    use pyo3::prelude::*;
-
-    /// `philis.place_and_route(netlist: str) -> str`
-    #[pyfunction]
-    fn place_and_route(input: &str) -> PyResult<String> {
-        super::place_and_route(input).map_err(PyValueError::new_err)
-    }
-
-    /// The `philis` module, exported as `PyInit_philis`. The function name must
-    /// match `module-name` in pyproject.toml.
-    #[pymodule]
-    fn philis(m: &Bound<'_, PyModule>) -> PyResult<()> {
-        m.add_function(wrap_pyfunction!(place_and_route, m)?)?;
-        m.add("__version__", env!("CARGO_PKG_VERSION"))?;
-        Ok(())
-    }
-}
+mod python;
 
 #[cfg(test)]
 mod tests {

@@ -1,0 +1,16 @@
+[package]
+name = "philis-tech"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "PDK technology compiler for the Philis analog layout engine"
+license = "MIT"
+
+[lib]
+name = "philis_tech"
+
+[dependencies]
+philis-geom = { path = "../geom" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+blake3 = "1"

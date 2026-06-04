@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Placement Algorithms &amp; Foundations — Philis</title>
+    <link rel="stylesheet" href="../../style.css" />
+    <link rel="icon" type="image/svg+xml" href="../../brand.svg" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../../index.html">
+        <img src="../../brand.svg" alt="Philis" />
+        Philis
+      </a>
+      <nav class="top-nav">
+        <a href="../../index.html">Home</a>
+        <a href="../../Usage/getting-started.html">Usage</a>
+        <a href="../api/index.html" class="active">Developer</a>
+        <a href="https://github.com/OmarSiwy/Philis">GitHub</a>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <h4>Developer</h4>
+        <ul>
+          <li><a href="../api/index.html">API</a></li>
+          <li><a href="../geom/index.html">Geometry</a></li>
+          <li><a href="../tech/index.html">Technology</a></li>
+          <li><a href="../verify/index.html">Verify</a></li>
+          <li><a href="../solver/index.html">Solver</a></li>
+          <li>
+            <a href="../place/index.html" class="active">Place</a>
+          </li>
+          <li><a href="../route/index.html">Route</a></li>
+          <li><a href="../constraints/index.html">Constraints</a></li>
+        </ul>
+        <h4>Place</h4>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="Signoff-First-Placement.html">Signoff-First Placement</a></li>
+          <li><a href="Placement-Algorithms.html" class="active">Placement Algorithms</a></li>
+          <li><a href="Api-Mapping.html">API Mapping</a></li>
+        </ul>
+        <h4>Usage</h4>
+        <ul>
+          <li>
+            <a href="../../Usage/getting-started.html">Getting Started</a>
+          </li>
+          <li><a href="../../Usage/installation.html">Installation</a></li>
+        </ul>
+      </aside>
+
+      <main class="content">
+        <p class="breadcrumb">
+          <a href="../../index.html">Home</a> / Developer /
+          <a href="index.html">Place</a> / Algorithms &amp; Foundations
+        </p>
+
+        <h1>Placement Algorithms &amp; Foundations</h1>
+        <p>
+          This page derives, from first principles, the mathematical machinery
+          the <a href="Signoff-First-Placement.html">signoff-first formulation</a>
+          invokes. For each mechanism it states the math or the core idea, then
+          maps it onto the <em>realized</em> Philis stage and the failure mode it
+          addresses. The throughline is the
+          <a href="index.html#hierarchy">lexicographic gate hierarchy</a>: a
+          mechanism either <strong>carves the feasible region</strong> (a hard or
+          bounded gate) or <strong>searches inside it</strong> (a soft inner
+          solver) — and nothing is permitted to do both.
+        </p>
+
+        <div class="note">
+          <strong>Realized vs. target — read this first.</strong> Philis today
+          ships a <em>deterministic group packer</em> plus an
+          <em>analytical centering/spacing pass</em>; it is <strong>not</strong>
+          yet a clause-learning SMT/CP-SAT search, an ePlace electrostatic
+          optimizer, an SDP/optimal-transport matcher, a Benders/column-generation/
+          Lagrangian decomposer, or a thermal/LDE field oracle. Everything in the
+          sections below labelled <em>target</em> is the contract the realized
+          stage <em>lowers into</em> — the formal property a future back end must
+          satisfy — not code that runs now. The honest stub status of every piece
+          is tracked in
+          <a href="https://github.com/OmarSiwy/Philis/blob/main/crates/api/STUBS.md"><code>crates/api/STUBS.md</code></a>
+          and on the <a href="Api-Mapping.html">API Mapping</a> page. Where this
+          page cites a realized identifier
+          (<code>philis::ACCEPTANCE_GATE_ORDER</code>,
+          <code>philis::evaluate_gate_acceptance</code>,
+          <code>philis::AcceptanceGate</code>,
+          <code>philis::PlacementCertificate</code>,
+          <code>philis::ConflictClass</code>), it is verified against
+          <code>crates/api/src/core.rs</code>. The exact/analytical function names
+          (<code>solve_discrete_assignments</code>, <code>refine_coordinates</code>)
+          and the module names (<code>solve/exact</code>,
+          <code>solve/analytical</code>, <code>solve/hybrid</code>) are the
+          paper's <em>conceptual</em> structure — they are <strong>not</strong>
+          present in <code>crates/api</code> yet.
+        </div>
+
+        <blockquote>
+          <p>
+            <strong>The inversion that organizes this page.</strong> Classical
+            placement makes a stochastic or analytical optimizer the
+            <em>acceptance criterion</em> and bolts on a late legality check.
+            Philis makes the typed gates the acceptance criterion and demotes
+            every optimizer — annealing, gradient descent, RL, diffusion — to a
+            <em>candidate generator</em>. Learned and stochastic search
+            <em>proposes</em>; the lexicographic gates <em>dispose</em>, and a
+            rejected proposal returns a typed conflict core, never a silently
+            worse score.
+          </p>
+        </blockquote>
+
+        <hr />
+
+        <h2 id="hybrid">1. The hybrid solver, realized vs. target</h2>
+        <p>
+          The realized solver is two deterministic passes wrapped by a validating
+          gate, not one global optimizer.
+        </p>
+        <h3>The exact stage — <code>solve_discrete_assignments</code> (<code>solve/exact</code>)</h3>
+        <p>
+          This stage fixes the <em>discrete skeleton</em>: it canonicalizes
+          instance names, collects the symmetry / common-centroid / ordering
+          companion groups, reorders centroid members into interdigitated slot
+          order, and packs the groups left-to-right onto rows, returning an
+          <code>explored_nodes</code> count. It is an <strong>exact-style</strong>
+          packer — exact search is the conceptual frame — but as realized it is a
+          deterministic greedy pass at <strong>O(n log n)</strong> with
+          <em>no proven discrete optimality</em>. It addresses the failure mode
+          where a wirelength gradient silently dissolves a matched group or picks
+          an orientation the PDK forbids: here variant, orientation, row/region,
+          symmetry axis, centroid pattern, and host binding are
+          <em>committed once, as a unit</em>.
+        </p>
+        <h3>The analytical stage — <code>refine_coordinates</code> (<code>solve/analytical</code>)</h3>
+        <p>
+          A legality-preserving centering pass that distributes row slack while
+          <strong>freezing every discrete choice</strong>. It is exactly the
+          <code>λ_A</code>-only special case of the full differentiable objective
+          of <a href="#electrostatic">§4</a> — soft analog slack and centering,
+          and nothing else — at <strong>O(iters·n)</strong>. It addresses the
+          failure mode where a discrete packer leaves devices jammed to one edge
+          with avoidable asymmetric parasitics, without ever risking a
+          legality-changing move.
+        </p>
+        <h3>The hybrid wrapper (<code>solve/hybrid</code>)</h3>
+        <p>
+          The wrapper validates that refinement changed
+          <strong>neither cardinality nor any
+          <code>(instance, primitive_id, orientation)</code> triple</strong>, then
+          re-runs the local-DRC oracle before accepting — so the cheap analytical
+          pass can never smuggle in an illegal or non-equivalent result. The
+          realized solver path is recorded as
+          <code>PlacementCertificate::solver_path</code> (e.g.
+          <code>"exact-&gt;analytical-&gt;legalize"</code>).
+        </p>
+        <div class="note">
+          <strong>Determinism is a contract, not an accident.</strong> A seed in
+          the input produces a <code>seed</code> / replay seed in the certificate
+          (<code>PlacementCertificate::seed</code>), and two runs produce
+          <em>byte-identical</em> output. This is guaranteed structurally:
+          canonicalized instance names, <code>BTreeMap</code>/<code>BTreeSet</code>
+          traversal order, evidence strings sorted into the certificate, and fixed
+          tie-breaks at every branch. Reproducibility is what makes the
+          <a href="#sac">self-adjusting</a> re-evaluation of §13 sound and the
+          conflict core auditable.
+        </div>
+        <p>
+          <strong>Target.</strong> The exact stage lowers into a clause-learning
+          SMT / CP-SAT search whose <code>explored_nodes</code> becomes a real
+          branch count and whose UNSAT core becomes the typed
+          <code>PlacementConflict</code> set; the analytical stage lowers into the
+          full electrostatic optimizer of §4. Both back ends are
+          <a href="Api-Mapping.html">stubs</a> today.
+        </p>
+
+        <h2 id="qap">2. Quadratic assignment / facility location</h2>
+        <p>
+          Place units <code>a</code> onto slots under an assignment
+          <code>f</code>; minimize interaction cost weighted by distance:
+        </p>
+        <pre><code>min_f  Σ_{a,b} W[a,b] · D[f(a), f(b)]
+       ≡  min  trace(W Xᵀ D X)     over permutation matrices X</code></pre>
+        <p>
+          This is the <strong>Quadratic Assignment Problem</strong>. It is
+          NP-hard, admits <em>no constant-factor approximation unless P = NP</em>,
+          and generalizes the TSP. The consequence is structural:
+          <strong>Philis never runs exact assignment over a whole block.</strong>
+          The realized block-level packer is the deterministic O(n log n) greedy
+          pass of <a href="#hybrid">§1</a>; exact search is reserved for the
+          <em>small, decomposed companion groups</em> where the slot count is
+          tiny. Well and region assignment is a separate QAP-like
+          <em>facility-location</em> sub-problem, handled by the capacity-driven
+          power diagram of <a href="#power">§9</a> rather than by global
+          enumeration.
+        </p>
+
+        <h2 id="encoding">3. Floorplan representations and the encoding-selection decision</h2>
+        <p>
+          The choice of floorplan encoding is itself a decision variable
+          <code>q_i ∈ {sequence-pair, B*-tree, O-tree, TCG, absolute integer
+          grid}</code>. The governing principle:
+        </p>
+        <blockquote>
+          <p>
+            Pick the representation whose <em>native invariant</em> matches the
+            sub-problem's <em>dominant constraint</em>, so the search space already
+            excludes the infeasible region — rather than penalizing infeasibility
+            after the fact.
+          </p>
+        </blockquote>
+        <table>
+          <tr><th>Dominant constraint</th><th>Encoding</th><th>Why it is native</th></tr>
+          <tr>
+            <td>Free-outline packing, few relations</td>
+            <td><strong>Sequence-pair</strong></td>
+            <td>A pair <code>(Γ+, Γ-)</code> of orderings; packing is a longest-path computation on the induced constraint graphs — every pair is a legal non-overlapping floorplan.</td>
+          </tr>
+          <tr>
+            <td>Incremental, non-slicing, area-driven</td>
+            <td><strong>B*-tree</strong></td>
+            <td>Contour/skyline packing in O(n); moves (rotate, swap, move) are local and cheap, ideal for an annealing inner loop.</td>
+          </tr>
+          <tr>
+            <td>Compact linear packing</td>
+            <td><strong>O-tree</strong></td>
+            <td>Smaller <code>(2n + n⌈log n⌉)</code>-bit state, O(n) packing — minimal encoding for tight linear arrangements.</td>
+          </tr>
+          <tr>
+            <td>Symmetry / common-centroid feasibility must be representation-native</td>
+            <td><strong>TCG</strong></td>
+            <td>Transitive-closure-graph edges make infeasible mirrorings <em>unreachable</em> — the symmetry invariant is encoded as graph structure, not a soft penalty.</td>
+          </tr>
+          <tr>
+            <td>Fixed-template lattice / FinFET row-fin-site / host-pin-anchored</td>
+            <td><strong>Absolute integer grid</strong></td>
+            <td>Lattice legality dominates free packing; symmetry becomes mirrored-coordinate equality <code>x_a + x_a' = 2·x_axis</code>; alignment is integer equality.</td>
+          </tr>
+        </table>
+        <div class="note">
+          <strong>The realized engine uses the absolute-grid path.</strong>
+          Placement runs on rows, a slot order, and interdigitated mirrored
+          centroid slots (cf. <code>philis::Strategy::CommonCentroid</code> /
+          <code>Interdigitated</code> in <code>core.rs</code>). The lattice is the
+          row/fin/site grid the technology-compilation phase normalizes, so
+          legality is a property of the coordinate type rather than a check run
+          afterward.
+        </div>
+
+        <h2 id="electrostatic">4. Electrostatic analytical placement (the target smooth stage)</h2>
+        <p>
+          The target smooth stage — what <code>refine_coordinates</code> lowers
+          into — replaces discrete packing with a differentiable objective.
+        </p>
+        <ul>
+          <li>
+            <strong>Smooth wirelength.</strong> Replace the non-differentiable HPWL
+            with log-sum-exp,
+            <code>(γ)·log(Σ exp(x_i/γ))</code>, or a weighted-average
+            approximation; <code>γ</code> controls the smoothing.
+          </li>
+          <li>
+            <strong>Density as electrostatic energy.</strong> Treat cell area as
+            charge; density overflow becomes potential energy
+            <code>N = ½ Σ q_i ψ(x_i, y_i)</code>, with the potential
+            <code>ψ</code> the solution of Poisson's equation
+            <code>−∇·(∇ψ) = ρ</code> under Neumann boundary conditions, solved
+            spectrally (FFT / cosine transform) in <strong>O(m log m)</strong>.
+            The gradient is the negative field <code>−∇ψ</code>.
+          </li>
+          <li>
+            <strong>Optimizer.</strong> Nesterov accelerated gradient with a
+            Lipschitz-predicted steplength; the density weight <code>λ_D</code> is
+            annealed so wirelength dominates early and legality (spreading)
+            dominates late.
+          </li>
+        </ul>
+        <p>The full differentiable objective the analytical stage lowers into:</p>
+        <pre><code>min  W_smooth
+   + λ_D · density
+   + λ_C · congestion
+   + λ_P · parasitic_envelope
+   + λ_A · analog_soft_slack</code></pre>
+        <div class="note warn">
+          <strong>A smooth loss is never a substitute for a hard gate.</strong>
+          The <code>λ_A</code> penalties apply <em>only</em> to bounded/soft
+          constraints — symmetry-island proximity, regularity, current-flow
+          compactness, common-centroid dispersion, coupling, template-boundary
+          margin. Every <em>hard</em> PDK/LVS constraint is re-checked after
+          rounding and legalization by the
+          <code>philis::AcceptanceGate::LocalDrc</code> and
+          <code>DeviceEquivalence</code> oracles. No finite <code>λ</code> may
+          stand in for <code>GateStatus::Pass</code>.
+        </div>
+
+        <h2 id="lex">5. Lexicographic and ε-constraint optimization</h2>
+        <p>
+          This is the mathematical justification for the
+          <a href="index.html#hierarchy">gate hierarchy</a> itself.
+        </p>
+        <ul>
+          <li>
+            <strong>Lexicographic optimization</strong> for the hard gates
+            <strong>G0–G4</strong>: solve level <code>k</code>, assert its
+            zero-violation / ε-optimum as a <em>hard constraint</em>, then continue
+            to level <code>k+1</code>. This is exactly
+            <code>philis::ACCEPTANCE_GATE_ORDER</code> evaluated under
+            <code>philis::evaluate_gate_acceptance</code> — a level can never be
+            traded against a lower one.
+          </li>
+          <li>
+            <strong>ε-constraint</strong> (Mavrotas augmented) for the bounded
+            <strong>G5</strong> budgets: hold <code>f_j ≤ ε_j</code> for each
+            PEX / EM / noise / LDE / thermal envelope while optimizing the
+            remainder.
+          </li>
+          <li>
+            <strong>Weighted scalarization</strong> confined to the soft
+            <strong>R6</strong> tail — the only place weights are permitted
+            (parasitics, area, HPWL, density, DFM, runtime).
+          </li>
+        </ul>
+        <blockquote>
+          <p>
+            No finite weight can guarantee a hard property when it conflicts with
+            wirelength. A nonzero hard violation is a <em>different feasibility
+            class</em>, not a worse score — which is precisely what the
+            <code>HardVector</code> lexicographic relation in <code>core.rs</code>
+            encodes for the routing sibling, and what the gate stack encodes for
+            placement.
+          </p>
+        </blockquote>
+
+        <h2 id="indexing">6. Spatial indexing</h2>
+        <p>
+          The geometric back ends behind the delta-record
+          <code>affected_objects</code> set and the local-DRC spacing test.
+        </p>
+        <ul>
+          <li>
+            <strong>Corner-stitching</strong> (Ousterhout): represent
+            <em>empty space</em> as explicit tiles alongside solid ones; edits and
+            neighbor queries are near-constant-time, and incremental DRC walks the
+            tile structure Magic-style. Used for the <em>edit-heavy</em> regions a
+            legalize/repair loop churns.
+          </li>
+          <li>
+            <strong>R-trees</strong>: minimum bounding rectangles with
+            <code>O(log n)</code> window queries and STR bulk-load. Used for the
+            <em>query-heavy static snapshots</em> — the read-mostly geometry the
+            access and routability oracles probe.
+          </li>
+        </ul>
+        <p>
+          Together they back the change-scoped re-evaluation of
+          <a href="#sac">§13</a>: corner-stitching localizes the edit, the R-tree
+          answers the spacing/window query against the frozen snapshot.
+        </p>
+
+        <h2 id="or">7. OR decomposition</h2>
+        <p>
+          When a block is too large for monolithic exact search, decompose it.
+          Each method also yields the <em>certificate artifact</em> Philis needs.
+        </p>
+        <table>
+          <tr><th>Method</th><th>Decomposition</th><th>Certificate artifact</th></tr>
+          <tr>
+            <td><strong>Logic-based Benders</strong></td>
+            <td>A master over the discrete decisions; a coordinate subproblem checks feasibility.</td>
+            <td>An infeasibility cut becomes a typed <code>philis::PlacementConflict</code> / infeasible core.</td>
+          </tr>
+          <tr>
+            <td><strong>Column generation / Dantzig-Wolfe</strong></td>
+            <td>Centroid and folding patterns are columns; a pricing subproblem generates promising ones.</td>
+            <td>The active pattern set with reduced-cost evidence.</td>
+          </tr>
+          <tr>
+            <td><strong>Lagrangian relaxation</strong></td>
+            <td>Dualize the linking non-overlap / capacity constraints into per-group subproblems.</td>
+            <td>A lower bound, hence a <em>certified optimality gap</em> for the R6 soft tail.</td>
+          </tr>
+        </table>
+
+        <h2 id="sdp">8. SDP and optimal transport</h2>
+        <p>
+          Two relaxations of the unit-to-slot matching, both
+          <strong>confined to soft / bounded matching quality</strong> — never a
+          hard gate.
+        </p>
+        <ul>
+          <li>
+            <strong>SDP relaxation of the QAP.</strong> Lift
+            <code>X</code> to <code>Y = vec(X)·vec(X)ᵀ ⪰ 0</code> with
+            doubly-stochastic row/column sums; the relaxation is often tight, and
+            a tight one rounds to a near-optimal permutation.
+          </li>
+          <li>
+            <strong>Optimal transport / Sinkhorn dispersion.</strong> Treat
+            slot assignment as a transport plan; entropic (Sinkhorn) regularization
+            yields a differentiable doubly-stochastic plan that anneals to a
+            permutation — a smooth <code>λ_A</code> dispersion penalty for
+            common-centroid spreading.
+          </li>
+        </ul>
+
+        <h2 id="power">9. Power diagrams + Minkowski sums</h2>
+        <p>
+          The exact-geometry foundations of region assignment and the spacing
+          predicate.
+        </p>
+        <ul>
+          <li>
+            <strong>Power diagram</strong> (weighted Voronoi):
+            <code>cell(s_i) = { p : |p − s_i|² − ω_i ≤ |p − s_j|² − ω_j ∀ j }</code>.
+            By Aurenhammer's theorem the weights <code>ω_i</code> drive the cell
+            areas to prescribed values, which is exactly what a
+            <em>capacity-constrained</em> well / region assignment needs: tune
+            weights until each region's area matches its device load.
+          </li>
+          <li>
+            <strong>Minkowski sum.</strong> Dilating a shape by a spacing ball,
+            <code>A ⊕ B_δ</code>, turns a spacing query into a
+            <em>point-in-polygon containment</em> test. This is the exact-geometry
+            core of the local-DRC spacing predicate behind
+            <code>philis::AcceptanceGate::LocalDrc</code> and of guard-ring /
+            high-voltage keepout checks.
+          </li>
+        </ul>
+
+        <h2 id="robust">10. Robust / chance-constrained PVT-and-mismatch budgeting</h2>
+        <p>
+          A bounded G5 budget that holds across process, voltage, temperature, and
+          random mismatch — not just at the nominal corner.
+        </p>
+        <pre><code>Robust:            max_{u ∈ U}  f_j(x, u)  ≤  ε_j
+Chance:            Pr[ f_j(x, ξ) ≤ ε_j ]  ≥  1 − α
+Gaussian SOC form: μ_j(x) + Φ⁻¹(1−α) · σ_j(x)  ≤  ε_j</code></pre>
+        <p>
+          The chance constraint, under a Gaussian model, becomes a
+          second-order-cone constraint on the mean and standard deviation of the
+          budgeted quantity. <strong>Pelgrom's law</strong>,
+          <code>σ ∝ 1/√(W·L)</code>, ties device area and folding directly to
+          mismatch robustness — which <em>elevates mismatch from a geometric proxy
+          to a budgeted G5 gate</em> rather than a soft afterthought.
+        </p>
+
+        <h2 id="thermal">11. Compact thermal RC</h2>
+        <p>
+          A lumped thermal network: heat capacitance <code>C</code>, conductance
+          <code>G</code>, power injection <code>P</code>.
+        </p>
+        <pre><code>Transient:   C · (dT/dt) + G · T = P
+Steady:      G · T = P      ⇒      T = G⁻¹ P
+Coupling:    G off-diagonal  1/R_ij  with  R_ij = length / (k · A_contact)</code></pre>
+        <blockquote>
+          <p>
+            The off-diagonal conductances are set by floorplan adjacency — so
+            <strong>the placement <em>is</em> the thermal model</strong>. Move two
+            power devices apart and you have changed <code>G</code>.
+          </p>
+        </blockquote>
+        <p>
+          This feeds a bounded thermal-gradient constraint at G5 and a soft
+          peak-temperature term in R6, and is <em>mandatory</em> for CFET vertical
+          assignment, where stacked tiers share a thermal path. The oracle is a
+          <a href="Api-Mapping.html">stub</a> today (<code>Coverage::Missing</code>).
+        </p>
+
+        <h2 id="lde">12. Layout-dependent-effect physics</h2>
+        <p>
+          Device parameters shift with the surrounding layout. Two dominant
+          effects, both posynomial / geometric-program compatible:
+        </p>
+        <ul>
+          <li>
+            <strong>Well-proximity effect (WPE).</strong>
+            <code>ΔV_th = KVTH0WE · (SCA + WEB·SCB + WEC·SCC)</code>, where the
+            <code>SC*</code> are monotone-decaying well-edge-distance integrals.
+            Matched pairs therefore need <em>equal well-edge distances</em>.
+          </li>
+          <li>
+            <strong>STI / LOD stress.</strong> Mobility/threshold shift decaying in
+            OD-edge distance, with <em>opposite sign</em> for PMOS vs. NMOS.
+          </li>
+        </ul>
+        <p>
+          These enter as a <strong>hard equality</strong> for matched groups —
+          realized today only as a T0 dummy-ring / equal-edge-context proxy — and
+          as a bounded <code>ΔV_th</code> / <code>Δμ</code> budget at G5 once the
+          LDE oracle lands.
+        </p>
+        <table>
+          <tr><th>Tier</th><th>Fidelity</th><th>Coverage class</th></tr>
+          <tr><td>T0</td><td>Geometric proxy (dummy ring, equal edge context)</td><td><code>Missing</code></td></tr>
+          <tr><td>T1</td><td>Rule-of-thumb closed form</td><td><code>Approximate</code></td></tr>
+          <tr><td>T2</td><td>PDK-supplied models</td><td><code>Partial</code></td></tr>
+          <tr><td>T3</td><td>Field-solver extraction</td><td><code>ExternalOnly</code></td></tr>
+        </table>
+        <p>
+          Placement (and the companion thermal model of §11) runs at
+          <strong>T0</strong> today: a geometric proxy that produces a
+          <code>degraded_confidence</code> certificate, never a signoff claim.
+        </p>
+
+        <h2 id="sac">13. Self-adjusting computation</h2>
+        <p>
+          A <em>dynamic dependence graph</em> with change-propagation backs the
+          delta-record-keyed, group-scoped re-evaluation — and guarantees the
+          reused result is <strong>bit-identical</strong> to a from-scratch run
+          (which the determinism contract of <a href="#hybrid">§1</a> makes
+          possible). The invalidation scope is two-tiered:
+        </p>
+        <table>
+          <tr><th>Change</th><th>Invalidates</th></tr>
+          <tr>
+            <td>variant · orientation · region · row · host-binding · access · route-reservation</td>
+            <td>only the affected <em>local</em> records (group-scoped)</td>
+          </tr>
+          <tr>
+            <td>PDK coverage · host template · extraction model · primitive generator</td>
+            <td>the <em>whole</em> certificate</td>
+          </tr>
+        </table>
+        <p>
+          The first tier is what makes the conflict-directed repair loop cheap; the
+          second is why a PDK or oracle change cannot be patched locally — it moves
+          the feasible region itself.
+        </p>
+
+        <h2 id="lineage">14. The search-heuristic lineage, framed honestly</h2>
+        <p>
+          The classical placement literature is a lineage of <em>candidate
+          generators</em>. Philis treats every one of them as an inner solver
+          <em>under</em> the hard gates — never as the acceptance criterion.
+        </p>
+        <table>
+          <tr><th>Heuristic</th><th>Mechanism</th><th>Role in Philis</th></tr>
+          <tr>
+            <td><strong>Simulated annealing</strong> (TimberWolf)</td>
+            <td>Metropolis acceptance <code>exp(−ΔE/T)</code>, cooling <code>α ≈ 0.95</code>.</td>
+            <td>Proposes moves on a floorplan encoding (<a href="#encoding">§3</a>).</td>
+          </tr>
+          <tr>
+            <td><strong>Parallel tempering</strong></td>
+            <td>Replica exchange across temperatures; <em>seeded</em> for reproducibility.</td>
+            <td>Deterministic when seeded — fits the §1 contract.</td>
+          </tr>
+          <tr>
+            <td><strong>RL floorplanners</strong></td>
+            <td>Relational-GNN encoder + RL agent with a routing-aware reward.</td>
+            <td>Generates discrete skeletons; reward is advisory, not acceptance.</td>
+          </tr>
+          <tr>
+            <td><strong>Generative / diffusion</strong> (LayoutDM)</td>
+            <td>Learned generative layout distribution.</td>
+            <td>Samples candidates; every sample is gated.</td>
+          </tr>
+        </table>
+        <blockquote>
+          <p>
+            <strong>The key inversion.</strong> Any proposal that violates a hard
+            gate is rejected with a typed conflict core
+            (<code>philis::PlacementConflict</code> via
+            <code>philis::ConflictClass::gate</code>), not merely scored lower.
+            Learned and stochastic search <em>proposes</em>; the typed gates
+            <em>dispose</em>. This is the same discipline that lets the realized
+            deterministic packer stand in for a future SMT search without changing
+            the acceptance relation — the optimizer can be swapped freely because
+            it was never load-bearing for soundness.
+          </p>
+        </blockquote>
+
+        <hr />
+
+        <h2>Where to go next</h2>
+        <ul>
+          <li>
+            <strong><a href="Signoff-First-Placement.html">Signoff-First Problem</a></strong>
+            — the formal problem the machinery above serves: the input tuple,
+            oracles, obligation/coverage vocabulary, gate hierarchy, repair loop,
+            and certificate.
+          </li>
+          <li>
+            <strong><a href="Api-Mapping.html">API Mapping &amp; Stubs</a></strong>
+            — how each mechanism lands on <code>crates/api/src/core.rs</code> and
+            exactly which back ends are still stubs.
+          </li>
+        </ul>
+      </main>
+    </div>
+
+    <footer class="site-footer">Philis &middot; Analog Layout Engine</footer>
+      <script src="../../nav.js"></script>
+  </body>
+</html>

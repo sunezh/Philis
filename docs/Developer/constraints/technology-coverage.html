@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PDK Technology &amp; Coverage — Philis</title>
+    <link rel="stylesheet" href="../../style.css" />
+    <link rel="icon" type="image/svg+xml" href="../../brand.svg" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../../index.html">
+        <img src="../../brand.svg" alt="Philis" />
+        Philis
+      </a>
+      <nav class="top-nav">
+        <a href="../../index.html">Home</a>
+        <a href="../../Usage/getting-started.html">Usage</a>
+        <a href="../api/index.html" class="active">Developer</a>
+        <a href="https://github.com/OmarSiwy/Philis">GitHub</a>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <h4>Developer</h4>
+        <ul>
+          <li><a href="../api/index.html">API</a></li>
+          <li><a href="../geom/index.html">Geometry</a></li>
+          <li><a href="../tech/index.html">Technology</a></li>
+          <li><a href="../verify/index.html">Verify</a></li>
+          <li><a href="../solver/index.html">Solver</a></li>
+          <li><a href="../place/index.html">Place</a></li>
+          <li><a href="../route/index.html">Route</a></li>
+          <li>
+            <a href="../constraints/index.html" class="active">Constraints</a>
+          </li>
+        </ul>
+        <h4>Constraints</h4>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="model.html">Canonical Model &amp; Identity</a></li>
+          <li><a href="technology-coverage.html" class="active">PDK Technology &amp; Coverage</a></li>
+          <li><a href="gates-and-quality.html">Gates &amp; Quality</a></li>
+          <li><a href="projections-certificate.html">Projections, Evidence &amp; Certificate</a></li>
+        </ul>
+        <h4>Usage</h4>
+        <ul>
+          <li>
+            <a href="../../Usage/getting-started.html">Getting Started</a>
+          </li>
+          <li><a href="../../Usage/installation.html">Installation</a></li>
+        </ul>
+      </aside>
+
+      <main class="content">
+        <p class="breadcrumb">
+          <a href="../../index.html">Home</a> / Developer /
+          <a href="index.html">Constraints</a> / PDK Technology &amp; Coverage
+        </p>
+
+        <h1>PDK Technology &amp; Coverage</h1>
+        <p>
+          The PDK compiler is the <strong>process-portability boundary</strong>.
+          The same problem setup must handle a 350&nbsp;nm mature-planar CMOS, a
+          BCD power process, a FinFET predictive node, and a sparse academic PDK
+          by changing the compiled technology model <code>T</code>, not by
+          changing the contract. It is not enough to say a PDK has layers, tracks,
+          vias, and DRC rules — the constraints layer must know <em>which rule
+          classes are enforceable for the requested confidence level</em>.
+        </p>
+
+        <h2 id="model">The compiled technology model</h2>
+        <pre><code>T = (U, L, D, M, V, R, X, C, A, Q)</code></pre>
+        <table>
+          <thead><tr><th>Section</th><th>Defines</th></tr></thead>
+          <tbody>
+            <tr><td><code>U</code></td><td>units, manufacturing grid, row/site/fin lattice, route tracks, legal phases, coordinate frames.</td></tr>
+            <tr><td><code>L</code></td><td>layer roles: active, poly, contact, local interconnect, metals, vias, cuts, wells, implants, markers, passivation, pads, RDL, backside, keepout.</td></tr>
+            <tr><td><code>D</code></td><td>devices, terminal order, PCell parameters, folding, segmentation, dummies, taps, guard rings, wells, bulk/substrate behavior, LVS mapping.</td></tr>
+            <tr><td><code>M</code></td><td>metal/via/cut/color predicates: width, spacing, enclosure, PRL, EOL, notch, min-area, max-width, density, slotting, antenna, DFM.</td></tr>
+            <tr><td><code>V</code></td><td>voltage, current, EM, IR, reliability, latch-up, ESD, isolation, domain-crossing predicates.</td></tr>
+            <tr><td><code>R</code></td><td>route access, pin layers, via stacks, preferred directions, unidirectional restrictions, over-device routing, terminal-access rules.</td></tr>
+            <tr><td><code>X</code></td><td>PEX, coupling, RC corners, via resistance, shielding, EM, noise, LDE, thermal models.</td></tr>
+            <tr><td><code>C</code></td><td>coloring, multipatterning, EUV, SADP/SAQP, cut masks, decomposition constraints.</td></tr>
+            <tr><td><code>A</code></td><td>bindings from internal analysis engines and external signoff decks to rule IDs.</td></tr>
+            <tr><td><code>Q</code></td><td>the <a href="#inventory">coverage inventory</a> — the universally-required section.</td></tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <strong>This is a target contract, not today's schema.</strong> A
+          present-day PDK schema typically has layers, tracks, vias, simple device
+          rules, and basic DRC rules. Color, density, fill, CMP, lithography,
+          EM/IR/LDE/noise models, external deck IDs, and manual-review coverage
+          must be added as explicit compiler coverage classes or overlays — not
+          assumed.
+        </div>
+
+        <h2 id="inventory">The coverage inventory and the MCMM key</h2>
+        <p>
+          Industrial signoff is multi-corner, multi-mode (MCMM): a <em>mode</em>
+          fixes clocks, supplies, and active constraints, while a <em>corner</em>
+          fixes a process/voltage/temperature library and extraction view. A rule,
+          model, or electrical bound can be satisfied in one corner and violated
+          in another, and a coverage cell can be <code>Coded</code> for one deck
+          option and <code>Missing</code> for another. Collapsing these views into
+          a single boolean produces the canonical MCMM error — reporting a layout
+          “clean” because the worst view was never evaluated.
+        </p>
+        <p>The coverage key is therefore six-dimensional:</p>
+        <pre><code>(rule_id, device_or_layer_scope, corner, mode, deck_id, host_template_id)</code></pre>
+        <p>
+          Conflict detection runs at the granularity of that key. Normalization
+          groups raw coverage entries by the full key (cost
+          <code>O(r&nbsp;log&nbsp;r)</code>) and, when entries that share a key
+          disagree, collapses the group into a single <code>Contradictory</code>
+          cell whose notes record the disagreeing corner/mode/deck views. That
+          <code>Contradictory</code> cell <em>is</em> the representation of a
+          cross-corner conflict.
+        </p>
+
+        <h3 id="meet">Merging required views — the conservative meet</h3>
+        <p>
+          When one obligation depends on a rule across several required MCMM
+          views, the views are merged by the lattice <em>meet</em> of
+          <a href="model.html#coverage">Coverage</a>. The merged cell is
+          <code>Coded</code> only if <strong>every</strong> required view is
+          <code>Coded</code>; otherwise it is the worst (lowest-information) view.
+          This is the algebraic statement of “passes at TT, untested at SS
+          resolves to the weaker value, not the optimistic one”:
+        </p>
+        <pre><code>info:  Coded 8 &gt; Partial 7 &gt; Approximate 6 &gt; RecommendedOnly 5
+     &gt; ExternalOnly 4 &gt; ManualReview 3 &gt; Unsupported 2 &gt; Missing 1
+     &gt; Contradictory 0
+
+meet(a, b) = the value with the lower info level
+merge_required(views) = fold meet over views        // Coded iff all Coded</code></pre>
+        <p>
+          Two distinct cross-corner situations must <em>not</em> be conflated:
+        </p>
+        <ol>
+          <li>
+            <strong>Coverage disagreement</strong> — the same rule is
+            <code>Coded</code> at one <code>(corner, mode, deck)</code> and
+            <code>Missing</code>/<code>Approximate</code> at another. The merged
+            cell is <code>Coded</code> only if every required view is; otherwise
+            the dependent obligation cannot reach Gate&nbsp;0 universally and is
+            reported per-view.
+          </li>
+          <li>
+            <strong>Electrical-bound disagreement</strong> — a bounded metric
+            (PEX coupling, IR drop, EM margin) is inside budget at the typical
+            corner and outside at the worst. This is not a coverage gap; it is a
+            <a href="gates-and-quality.html#gates">Gate-6</a> failure scoped to the
+            failing corner, attributed to the specific
+            <code>(metric, corner, mode)</code> view.
+          </li>
+        </ol>
+        <div class="note danger">
+          <strong>Conservative acceptance.</strong> A result is
+          <code>signoff_quality</code> only if <em>every required</em>
+          corner/mode/deck view passes its hard gates and stays inside its bounded
+          budgets. A layout that passes the typical view but fails a required
+          worst view is reported <code>signoff_ready_at(view)</code> for the
+          passing views and as a bounded/coverage failure keyed to the failing
+          view — never as universally signoff-ready. “Passes at TT, untested at
+          SS/FF” becomes an explicit, certificate-visible state instead of an
+          accidental pass.
+        </div>
+
+        <h2 id="nodes">Process-node coverage</h2>
+        <p>
+          The same contract spans process families by changing <code>T</code>.
+          What changes is the rule set each family forces into the inventory:
+        </p>
+        <table>
+          <thead><tr><th>Process family</th><th>Required constraint treatment</th></tr></thead>
+          <tbody>
+            <tr><td>Mature planar CMOS (350–130&nbsp;nm)</td><td>rich device/well/tap/guard rules, many analog primitives, flexible routing, manual-review rules, RF/passive variants, open-PDK verification gaps.</td></tr>
+            <tr><td>BCD / HV / automotive / power</td><td>voltage-dependent spacing, isolation, latch-up, guard rings, ESD, thick metals, current density, thermal, safe operating domains.</td></tr>
+            <tr><td>RF / BiCMOS</td><td>substrate coupling, inductor/transformer keepouts, transmission-line behavior, shield topology, passives, device-specific extraction, HBT/RF/HV device classes.</td></tr>
+            <tr><td>Scaled planar (90–28&nbsp;nm)</td><td>tighter DRC, density/fill, antenna, CMP, OPC/lithography effects, local interconnect, stricter pin access.</td></tr>
+            <tr><td>FinFET / 7&nbsp;nm-class predictive</td><td>discrete fin/site choices, unidirectional routing, cut masks, color, MOL/BEOL restrictions, SADP/SAQP/EUV assumptions.</td></tr>
+            <tr><td>GAA / CFET / backside / 3D / RDL</td><td>stack orientation, backside/BEOL separation, thermal/reliability coupling, new layer classes, package-facing constraints.</td></tr>
+            <tr><td>Sparse research PDK</td><td>partial coverage, approximate extraction, synthetic checks, mandatory degraded-confidence status.</td></tr>
+            <tr><td>Contradictory / missing PDK</td><td>fail early with coverage/core diagnostics, not a guessed signoff result.</td></tr>
+            <tr><td>Cross-corner / MCMM conflict</td><td>rule/model coverage, deck behavior, or electrical bounds disagree across PVT, mode, voltage domain, host template, or extraction corner.</td></tr>
+          </tbody>
+        </table>
+        <p>
+          The important rule throughout: <strong>unsupported coverage is not
+          success.</strong> A layout can be internally DRC-clean under coded
+          min-width and min-spacing rules while still not be signoff-quality
+          because notch, antenna, HV, density, color, or manual-review
+          requirements are absent. Coverage must be tracked per corner and mode; a
+          layout clean for one RC corner or deck option but uncertified for another
+          cannot be reported as universally signoff-ready.
+        </p>
+
+        <h2 id="theory">Why coverage is an abstract domain</h2>
+        <p>
+          Coverage accounting makes a <em>safety</em> claim — “no required rule is
+          silently treated as present when it is not” — and abstract
+          interpretation is the theory of making such claims sound by
+          construction. An abstract analysis must <em>over-approximate</em> the
+          concrete one: it may lose precision but must never miss a concrete
+          behavior, so a sound analysis has <strong>no false negatives</strong>.
+          The coverage lattice (<code>Coded</code> … <code>Missing</code> /
+          <code>Contradictory</code>) is the abstract domain, and the merge above
+          is its meet. The soundness obligation Philis inherits is the conservative
+          direction of every uncertain join: when two views disagree or a value is
+          unknown, the merged coverage moves toward
+          <code>Missing</code>/<code>Contradictory</code>, never toward
+          <code>Coded</code>. That is the formal reason a layout is reported
+          <code>signoff_ready_internal</code> rather than
+          <code>signoff_quality</code> whenever any required cell is below
+          <code>Coded</code> — over-approximating risk (never under-approximating
+          it) is the abstract-interpretation soundness condition that keeps the
+          certificate from certifying a gap it failed to model.
+        </p>
+
+        <p>
+          <strong>Continue:</strong>
+          <a href="gates-and-quality.html">Gates &amp; Quality →</a>
+        </p>
+      </main>
+    </div>
+
+    <footer class="site-footer">Philis &middot; Analog Layout Engine</footer>
+      <script src="../../nav.js"></script>
+  </body>
+</html>

@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Projections, Evidence &amp; Certificate — Philis</title>
+    <link rel="stylesheet" href="../../style.css" />
+    <link rel="icon" type="image/svg+xml" href="../../brand.svg" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../../index.html">
+        <img src="../../brand.svg" alt="Philis" />
+        Philis
+      </a>
+      <nav class="top-nav">
+        <a href="../../index.html">Home</a>
+        <a href="../../Usage/getting-started.html">Usage</a>
+        <a href="../api/index.html" class="active">Developer</a>
+        <a href="https://github.com/OmarSiwy/Philis">GitHub</a>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <h4>Developer</h4>
+        <ul>
+          <li><a href="../api/index.html">API</a></li>
+          <li><a href="../geom/index.html">Geometry</a></li>
+          <li><a href="../tech/index.html">Technology</a></li>
+          <li><a href="../verify/index.html">Verify</a></li>
+          <li><a href="../solver/index.html">Solver</a></li>
+          <li><a href="../place/index.html">Place</a></li>
+          <li><a href="../route/index.html">Route</a></li>
+          <li>
+            <a href="../constraints/index.html" class="active">Constraints</a>
+          </li>
+        </ul>
+        <h4>Constraints</h4>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="model.html">Canonical Model &amp; Identity</a></li>
+          <li><a href="technology-coverage.html">PDK Technology &amp; Coverage</a></li>
+          <li><a href="gates-and-quality.html">Gates &amp; Quality</a></li>
+          <li><a href="projections-certificate.html" class="active">Projections, Evidence &amp; Certificate</a></li>
+        </ul>
+        <h4>Usage</h4>
+        <ul>
+          <li>
+            <a href="../../Usage/getting-started.html">Getting Started</a>
+          </li>
+          <li><a href="../../Usage/installation.html">Installation</a></li>
+        </ul>
+      </aside>
+
+      <main class="content">
+        <p class="breadcrumb">
+          <a href="../../index.html">Home</a> / Developer /
+          <a href="index.html">Constraints</a> / Projections, Evidence &amp; Certificate
+        </p>
+
+        <h1>Projections, Evidence &amp; Certificate</h1>
+        <p>
+          This page covers the back half of the pipeline: how the
+          <code>IntentGraph</code> becomes typed consumer obligations
+          (<a href="#projections">projection</a>), how conflicts are resolved
+          without losing provenance (<a href="#reconcile">reconciliation</a>), how
+          signoff evidence flows back without thrashing
+          (<a href="#evidence">the evidence loop</a>), how the typed problem is
+          lowered to backends (<a href="#solver">the solver stack</a>), and what
+          the system ultimately returns (<a href="#certificate">the
+          certificate</a>). Three of the four formal invariants live here.
+        </p>
+
+        <h2 id="projections">Projection — a view, not a translation</h2>
+        <p>
+          Projection is a deterministic <em>query</em> over the canonical graph
+          that selects the obligations relevant to one consumer and reshapes them
+          into that consumer's schema. It is not a best-effort rewrite into the
+          consumer's native vocabulary — which would silently lose whatever does
+          not fit.
+        </p>
+        <pre><code>Project_place(I)    → obligations over primitive choices, transforms,
+                      terminals, host objects, access witnesses, local checks
+Project_route(I)    → obligations over nets, terminals, access choices, routes,
+                      shields, matching, power, repair, and PEX budgets
+Project_analysis(I) → obligations over rule IDs, expected evidence, corners,
+                      snapshots, external decks, and unsupported rules</code></pre>
+
+        <h3 id="inv1">Invariant 1 — projection soundness (no add, no silent drop)</h3>
+        <p>
+          For every consumer <code>s ∈ {place, route, analysis}</code>, let
+          <code>Oblig_s(I)</code> be the obligations whose consumer mask includes
+          <code>s</code>. Then a projection must satisfy:
+        </p>
+        <pre><code>Project_s(I).expressed  ∪  Project_s(I).skipped  =  Oblig_s(I)   (partition)
+Project_s(I).expressed  ∩  Project_s(I).skipped  =  ∅
+∀ p ∈ expressed ∪ skipped :  p.id ∈ ids(I)                      (resolves back)</code></pre>
+        <p>
+          A projection may not invent an obligation absent from <code>I</code>
+          (every projected ID resolves back into the graph), and it may not drop a
+          consumer-relevant obligation without recording it in
+          <code>skipped</code> with a reason. The absence of a skip is a
+          <em>positive, replayable claim</em> that the obligation was honored.
+        </p>
+        <p>
+          In compiler terms this is <strong>translation validation</strong>, not a
+          verified compiler. Philis does not prove once and for all that
+          projection preserves semantics; instead every individual projection run
+          emits a witness whose check is cheap and replayable — the
+          expressed/skipped partition plus the canonical-ID links <em>is</em> the
+          simulation relation made concrete. The projector may use any internal
+          strategy and change between releases, yet each run still carries a
+          self-contained certificate that it neither invented nor silently dropped
+          intent.
+        </p>
+
+        <h3 id="inexpressible">The inexpressibility contract</h3>
+        <p>
+          When consumer <code>s</code> cannot represent an obligation
+          <code>c</code> in its native model, it must do all of the following, in
+          order, and may do none of them silently:
+        </p>
+        <ol>
+          <li>
+            <strong>Emit a linked skip.</strong> Append a
+            <code>ProjectedConstraintSkip { constraint_id: c.id, reason }</code> to
+            the consumer's <code>skipped</code>/<code>unsupported</code> list. The
+            <code>constraint_id</code> is <code>c</code>'s canonical ID; the
+            <code>reason</code> is a typed category (inexpressible, out-of-scope,
+            coverage-gap, capability-version-mismatch), not free prose.
+          </li>
+          <li>
+            <strong>Never approximate a hard obligation into a soft one.</strong>
+            If <code>c</code> is <code>Hard</code>/<code>Joint</code> and the
+            consumer cannot express it, the skip is itself a hard-gate input — the
+            obligation surfaces in the relevant hard count and <em>fails</em> the
+            lexicographic gate rather than vanishing.
+          </li>
+          <li>
+            <strong>Downgrade only with authority.</strong> A consumer may report
+            a <code>downgraded</code> status (e.g. heuristic terminal access in
+            place of a proven witness) only when policy permits, recorded as
+            <code>DegradedConfidence</code> evidence keyed to <code>c.id</code>,
+            which forces the final claim to <code>signoff_ready</code>, not
+            <code>signoff_quality</code>.
+          </li>
+          <li>
+            <strong>Round-trip through evidence.</strong> The skip/downgrade enters
+            <code>E_prev</code> so the next compile can attempt repair, choose a
+            fallback projection, or escalate to a contradiction core if no consumer
+            can ever honor <code>c</code>.
+          </li>
+        </ol>
+        <p>
+          The contract is symmetric: the analysis consumer that lacks an internal
+          check for a rule does not drop the rule — it emits an
+          <code>UnsupportedRequirement</code> or
+          <code>ExternalDeckRequirement</code> linked to the rule's obligation ID,
+          the analysis-side form of the same skip.
+        </p>
+
+        <h3>Projection report types</h3>
+        <p>The three projections carry the consumer-shaped obligation lists:</p>
+        <pre><code>PlacementConstraintProjection {
+    primitive_obligations, geometry_obligations, matching_obligations,
+    host_obligations, terminal_access_requirements, routability_requirements,
+    pex_envelopes, skipped }
+
+RoutingConstraintProjection {
+    net_classes, terminal_access, connectivity, shields_and_guards, matching,
+    power_and_domain, pex_ir_em_noise_bounds, repair_groups, skipped }
+
+AnalysisObligationProjection {
+    drc_rules, lvs_expectations, pex_corners, em_ir_noise, external_decks,
+    manual_review, unsupported }</code></pre>
+
+        <h3 id="ivm">Projections are incrementally maintained views</h3>
+        <p>
+          Framing a projection as a materialized <em>view</em> (rather than a
+          one-shot translation) is what licenses the partition invariant — a view
+          adds no tuple absent from its source and is recomputable at any time —
+          and what makes incremental recompilation tractable. The
+          <code>IntentGraph</code> is rebuilt on every edit, but recomputing
+          everything from scratch on each keystroke is wasteful. The discipline is
+          <strong>incremental view maintenance</strong> (DBSP-style): the
+          obligation set is a weighted multiset (a Z-set) keyed by
+          content-addressed ID; a re-detect of an unchanged obligation contributes
+          a <code>+1</code> that cancels the prior state's <code>+1</code> (zero
+          net change, no downstream work — “unchanged” is decidable by ID
+          equality, for free, because of content addressing); and a genuine edit
+          contributes a small delta that flows through the incrementalized
+          projection to update only the affected entries and certificate sections.
+          Two Philis properties make this <em>applicable</em> rather than merely
+          analogous: determinism (the same input change yields the same output
+          change) and content addressing (deltas are computed by ID set
+          difference, not structural diffing).
+        </p>
+
+        <h2 id="reconcile">Reconciliation — waivers and cores</h2>
+
+        <h3 id="inv2">Invariant 2 — waiver∘authority composition</h3>
+        <p>
+          Waivers compose with authority as a guarded annotation, never a
+          deletion. Let <code>rank(·)</code> be the
+          <a href="model.html#authority">precedence order</a>. A waiver
+          <code>w</code> over obligation <code>c</code> is admissible iff:
+        </p>
+        <pre><code>admissible(w, c)  ⇔  rank(authority(w)) ≥ rank(required_authority(c))
+
+apply(w, c) = c with waiver := Some(w)   if admissible(w, c)
+            = c with waiver := None      otherwise (+ diagnostic)</code></pre>
+        <p>
+          Composition is <strong>idempotent and order-independent</strong>:
+          applying an admissible waiver twice equals once, and admissible waivers
+          can be applied in any order with the same result, because admissibility
+          depends only on the static <code>(authority, required_authority)</code>
+          pair. An inadmissible waiver is rejected (the obligation snaps back to
+          enforced) and emits a diagnostic — never silently honored. Because waived
+          obligations stay in the graph (only the <code>waiver</code> field is
+          set), the certificate can still report <em>what</em> was waived,
+          <em>by whom</em>, and <em>under which authority</em> — mandatory for any
+          signoff claim resting on a waiver.
+        </p>
+        <p>
+          This is exactly the discipline an <strong>assumption-based truth
+          maintenance system</strong> (ATMS) arrived at: a waiver is an
+          <em>assumption</em> with an authority rank; the obligation's retained
+          <code>waiver</code> field plus provenance edges are its <em>label</em>;
+          and a contradiction core is a <em>nogood</em>. Keeping waived
+          obligations in the graph keeps the ATMS label intact, which is what lets
+          the certificate answer “on which assumptions does this signoff claim
+          rest?” — the question an unrecorded hard delete makes unanswerable.
+        </p>
+
+        <h3 id="inv3">Invariant 3 — contradiction-core minimality</h3>
+        <p>
+          Cores carry an explicit minimality tag naming the guarantee they
+          actually provide, rather than overclaiming a globally minimal
+          unsatisfiable subset:
+        </p>
+        <table>
+          <thead><tr><th>Tag</th><th>Guarantee</th><th>Produced by</th></tr></thead>
+          <tbody>
+            <tr><td><code>singleton</code></td><td>a single self-contradictory obligation (e.g. a hard obligation whose coverage is <code>Missing</code>/<code>Contradictory</code>). Trivially minimal.</td><td>structural (cheap)</td></tr>
+            <tr><td><code>pairwise</code></td><td>two obligations that disagree; removing either removes the contradiction. Minimal w.r.t. the conflict relation.</td><td>structural (cheap)</td></tr>
+            <tr><td><code>groupwise</code> / <code>victimwise</code></td><td>group-preserving / authority-driven sacrifices.</td><td>structural (cheap)</td></tr>
+            <tr><td><code>set-minimal-preferred</code></td><td>a single <em>preferred</em> MUS under an authority ordering.</td><td>QuickXplain (exact)</td></tr>
+            <tr><td><code>set-minimal-enumerated</code></td><td>one of several independent MUSes.</td><td>MARCO (exact)</td></tr>
+          </tbody>
+        </table>
+        <p>
+          Reconciliation-time cores advertise the cheap, structural guarantee so
+          the certificate never claims more minimality than was proven; deck-level
+          set-minimality is reserved for the exact-solver path and tagged with the
+          algorithm that certifies it. Each core also content-addresses its
+          identity (a hash of the sorted member-ID list plus a reason tag), so
+          “the same infeasible case always produces the same conflict core” is a
+          checkable invariant.
+        </p>
+
+        <h3 id="musmcs">MUS, MCS, MaxSAT, and hitting-set duality</h3>
+        <p>
+          Over an unsatisfiable obligation set <code>F</code>, the certificate
+          names which object it reports:
+        </p>
+        <ul>
+          <li><strong>MUS</strong> — a Minimal Unsatisfiable Subset: an infeasible <code>S ⊆ F</code> whose every strict subset is feasible. A <em>minimal reason</em>: drop any member and the contradiction vanishes.</li>
+          <li><strong>MCS</strong> — a Minimal Correction Set: a <code>C ⊆ F</code> such that <code>F \ C</code> is feasible and no strict subset is. A <em>minimal repair</em>: relax/waive exactly these and feasibility returns.</li>
+          <li><strong>MaxSAT</strong> — satisfy as many (weighted) obligations as possible; its complement is a minimum-weight MCS, the cost-optimal member of the MCS family. This is why the bounded/soft tiers can be lowered to weighted partial MaxSAT once the hard tier is fixed.</li>
+        </ul>
+        <p>
+          <strong>Hitting-set duality</strong> ties them together: a subset is a
+          MUS iff it is a minimal hitting set of all MCSes, and dually. So a
+          <em>repair</em> and an <em>explanation</em> are two readings of one
+          structure — the conflict core and the suggested relaxation come from one
+          enumeration, not two. The certificate tags each core with both its
+          minimality kind and the algorithm that produced it, so a reader knows
+          whether they hold a single preferred reason or an exhaustive set, and
+          whether the paired relaxation is cost-optimal (MaxSAT) or merely minimal
+          (MCS).
+        </p>
+
+        <h2 id="evidence">The evidence &amp; repair loop</h2>
+
+        <h3 id="inv4">Invariant 4 — monotonic evidence ingestion (no thrashing)</h3>
+        <p>
+          Evidence updates the graph monotonically. Each ingested report can only
+          <em>tighten</em> the feasibility picture for a given key — it adds a
+          result, refines a coverage cell, or opens a repair obligation, but never
+          silently overwrites a prior failing result with a passing one without
+          recording the transition. The ingestion key is:
+        </p>
+        <pre><code>(constraint_id, domain, subject_key, corner, mode, deck_id)</code></pre>
+        <p>
+          Results accumulate as an <strong>append-only ledger</strong> keyed by
+          that tuple. A later “pass” after an earlier “fail” for the same key is
+          recorded as a repair transition with both endpoints retained, not as an
+          erasure. This prevents the classic repair-loop pathology where a
+          constraint flips pass/fail/pass and the solver oscillates: because the
+          ledger is append-only and keyed, the lexicographic comparator sees a
+          strictly non-increasing hard vector across accepted repair steps, so a
+          repair that does not reduce the hard (then bounded) vector is
+          <em>rejected</em>. Termination reduces to the well-foundedness of the
+          lexicographic order on a bounded-dimension non-negative integer vector.
+        </p>
+        <p>How signoff markers become structured obligations:</p>
+        <table>
+          <thead><tr><th>Evidence marker</th><th>Becomes</th></tr></thead>
+          <tbody>
+            <tr><td>DRC spacing marker between matched drain routes</td><td>a routing repair obligation that preserves the matched group — not a one-sided rip-up.</td></tr>
+            <tr><td>LVS terminal mismatch</td><td>a primitive/terminal-map obligation, not a route-cost penalty.</td></tr>
+            <tr><td>PEX coupling excess on a sensitive net</td><td>a bounded shield/spacing obligation with an aggressor/victim evidence edge.</td></tr>
+            <tr><td>missing PDK antenna rule</td><td>a degraded-confidence or external-only obligation, by policy.</td></tr>
+            <tr><td>fixed host pin conflicting with symmetry</td><td>a hard contradiction core involving the host binding and the symmetry edge.</td></tr>
+          </tbody>
+        </table>
+
+        <h2 id="solver">The solver stack</h2>
+        <p>
+          Solving is a stack of specialized backends, not one global scalar
+          optimizer. A single generic local search cannot <em>prove</em>
+          infeasibility (failing to find a solution is indistinguishable from a
+          timeout) and cannot emit an unsat core; forcing finite hard decisions
+          through a continuous optimizer either rounds illegally or stalls.
+        </p>
+        <table>
+          <thead><tr><th>Layer</th><th>Role</th></tr></thead>
+          <tbody>
+            <tr><td>Exact feasibility</td><td>SMT / CP-SAT / MILP / MaxSAT for finite hard decisions: primitive variants, symmetry membership, order, common-centroid unit assignment, host pin binding, voltage-domain separation, route-group membership, unsupported-rule policy.</td></tr>
+            <tr><td>Graph algorithms</td><td>union-find, bipartite matching, graph isomorphism, min-cut, flow, coloring, hypergraph partitioning where structure is graph-native. <code>Joint</code> obligations are encoded as <strong>global constraints</strong> with matching-based filtering (prune to generalized arc consistency in one pass), preserving the group as an atomic unit.</td></tr>
+            <tr><td>Analytical relaxations</td><td>continuous proxies for area, density, congestion, PEX, thermal, LDE, soft parasitic ranking — after hard gates are fixed.</td></tr>
+            <tr><td>Heuristic repair</td><td>search and repair for local violations, storing learned penalties and nogoods as evidence tied to canonical IDs.</td></tr>
+          </tbody>
+        </table>
+        <p>
+          The public lowering surface carries a staged or vector objective before
+          any backend-specific lowering, plus a closed set of backend artifact
+          classes:
+        </p>
+        <pre><code>LexicographicObjective { hard: Vec&lt;HardGate&gt;, bounded: Vec&lt;BoundedMetric&gt;, soft: Vec&lt;SoftMetric&gt; }
+
+BackendArtifact = ProofLog | UnsatCore | CorrectionSet
+                | FeasibleModel | ModelInvalid | Unknown | HeuristicTrace</code></pre>
+        <div class="note warn">
+          <strong>Budget-gated explanation.</strong> The exact MUS/MCS pass is the
+          only super-polynomial component and is bounded by the budget vector. If
+          the cap is hit, the solver returns <code>Unknown</code> with a partial
+          core rather than reporting infeasibility — a timeout is never reported as
+          proven-infeasible or signoff-ready.
+        </div>
+
+        <h2 id="certificate">The constraint certificate</h2>
+        <p>
+          The output of the system is a <em>certificate</em>, not merely a list of
+          constraints. It is the replayable record a third party uses to re-check
+          every invariant. It should include:
+        </p>
+        <ul>
+          <li>canonical input hashes for schematic, hierarchy, PDK, host template, user constraints, and fixed geometry;</li>
+          <li>the PDK / deck / model coverage inventory with stable rule IDs and the hash family used for identity;</li>
+          <li>the normalized <code>IntentGraph</code> and the three projection reports (expressed + skipped/downgraded);</li>
+          <li>applied, skipped, downgraded, unsupported, external-only, and manual-review obligations;</li>
+          <li>hard-vector and bounded-vector status;</li>
+          <li>DRC, LVS, PEX, EM, ERC, antenna, density, color, and manual-review evidence requirements;</li>
+          <li>solver transcripts sufficient to reproduce hard decisions or identify unsat cores — proof logs, unsat cores, correction sets, feasible models, invalid-model reports, unknown statuses, heuristic traces;</li>
+          <li>the deterministic seed and tie-break policy;</li>
+          <li>repair history and learned nogoods;</li>
+          <li>degraded-confidence flags and user waivers.</li>
+        </ul>
+        <p>
+          The realized API already ships a stage-scoped instance of this idea: the
+          <code>PlacementCertificate</code> in <code>crates/api/src/core.rs</code>
+          carries the acceptance-gate verdicts, the degraded-confidence causes, the
+          solver path, the replay seed, and a <code>RouterHandoffWitness</code>.
+          Its <code>::stub()</code> form is the honest placeholder — every gate
+          <code>Degraded</code> with an “engine stub” cause — so the surface never
+          claims a signoff it has not proven. A <code>PlacementCertificate</code>
+          proves only facts owned by placement and checked by declared oracles; it
+          is not a foundry-signoff substitute. Final DRC=0 and LVS=true belong to
+          verification, to which the constraints layer projects analysis
+          obligations and from which it ingests counterexample-carrying evidence —
+          a closed loop with the canonical <code>constraint_id</code> as the only
+          shared key.
+        </p>
+
+        <h2 id="taxonomy">Case taxonomy</h2>
+        <p>
+          A paper-quality formulation must cover all relevant cases, not only easy
+          current-mirror or differential-pair examples. The solver/verification
+          state axis in particular must distinguish six outcomes that a naive
+          system would collapse:
+        </p>
+        <table>
+          <thead><tr><th>State</th><th>Required behavior</th></tr></thead>
+          <tbody>
+            <tr><td>Clean</td><td>all gates pass on coded evidence → signoff-quality.</td></tr>
+            <tr><td>Repairable</td><td>evidence opens a repair obligation that strictly improves the hard/bounded vector.</td></tr>
+            <tr><td>Degraded confidence</td><td>passes coded gates but a required rule/model/deck is external/approximate/missing → signoff-ready, not signoff-quality.</td></tr>
+            <tr><td>Proven infeasible</td><td>returns a stable conflict core, never a guessed layout.</td></tr>
+            <tr><td>Timeout / unproven</td><td>returns <code>Unknown</code> + partial core — never reported as infeasible or signoff-ready.</td></tr>
+            <tr><td>Cross-corner conflict</td><td>identifies the <code>(rule, corner, mode, deck, host-template)</code> key that prevents universal acceptance.</td></tr>
+          </tbody>
+        </table>
+
+        <h2 id="worked">Worked example</h2>
+        <p>
+          A differential input pair with a current-mirror load illustrates the
+          contract. The compiler does not stop after detecting symmetry: it emits
+          placement obligations (symmetry axis, same template, common-source
+          alignment), routing obligations (matched drains, shielded high-Z nodes,
+          power trunk), and analysis evidence requirements (LVS terminal map, PEX
+          delta bound, DRC rules). If post-route PEX violates the pair delta, the
+          repair obligation is attached to the <em>matched group</em> and cannot
+          be solved by perturbing one route independently unless the graph
+          explicitly allows that degradation.
+        </p>
+        <p>
+          A second example — a fixed-template LDO or bandgap in an open-source PDK
+          where antenna, density/fill, or HV isolation rules are external-only or
+          manual-review — still emits placement and routing obligations, but the
+          certificate must say:
+        </p>
+        <pre><code>Coverage(rule=antenna.*, corner=all, deck=open)   = ExternalOnly
+Coverage(rule=density_fill.*, host=template_A)    = ManualReview
+TerminalAccess(pin=VOUT, source=heuristic)        = DegradedConfidence
+FinalClaim     = signoff_ready_internal, not signoff_quality
+RequiredEvidence = external antenna deck + manual fill review + access witness</code></pre>
+        <p>
+          If the user requested signoff-quality output, this state is
+          <em>incomplete</em>, not successful. If they requested exploratory
+          output, it is acceptable only with explicit degraded-confidence flags and
+          replayable evidence requirements.
+        </p>
+
+        <hr />
+        <p>
+          <strong>Back to:</strong>
+          <a href="index.html">Constraints Overview</a> ·
+          <a href="model.html">Canonical Model</a> ·
+          <a href="technology-coverage.html">PDK Technology &amp; Coverage</a> ·
+          <a href="gates-and-quality.html">Gates &amp; Quality</a>
+        </p>
+      </main>
+    </div>
+
+    <footer class="site-footer">Philis &middot; Analog Layout Engine</footer>
+      <script src="../../nav.js"></script>
+  </body>
+</html>

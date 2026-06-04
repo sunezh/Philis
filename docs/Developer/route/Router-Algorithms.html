@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Router Algorithms &amp; Foundations — Philis</title>
+    <link rel="stylesheet" href="../../style.css" />
+    <link rel="icon" type="image/svg+xml" href="../../brand.svg" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../../index.html">
+        <img src="../../brand.svg" alt="Philis" />
+        Philis
+      </a>
+      <nav class="top-nav">
+        <a href="../../index.html">Home</a>
+        <a href="../../Usage/getting-started.html">Usage</a>
+        <a href="../api/index.html" class="active">Developer</a>
+        <a href="https://github.com/OmarSiwy/Philis">GitHub</a>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <h4>Developer</h4>
+        <ul>
+          <li><a href="../api/index.html">API</a></li>
+          <li><a href="../geom/index.html">Geometry</a></li>
+          <li><a href="../tech/index.html">Technology</a></li>
+          <li><a href="../verify/index.html">Verify</a></li>
+          <li><a href="../solver/index.html">Solver</a></li>
+          <li><a href="../place/index.html">Place</a></li>
+          <li>
+            <a href="../route/index.html" class="active">Route</a>
+          </li>
+          <li><a href="../constraints/index.html">Constraints</a></li>
+        </ul>
+        <h4>Route</h4>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="Signoff-First-Routing.html">Signoff-First Routing</a></li>
+          <li><a href="Router-Algorithms.html" class="active">Router Algorithms</a></li>
+          <li><a href="Api-Mapping.html">API Mapping</a></li>
+        </ul>
+        <h4>Usage</h4>
+        <ul>
+          <li>
+            <a href="../../Usage/getting-started.html">Getting Started</a>
+          </li>
+          <li><a href="../../Usage/installation.html">Installation</a></li>
+        </ul>
+      </aside>
+
+      <main class="content">
+        <p class="breadcrumb">
+          <a href="../../index.html">Home</a> / Developer / Route /
+          Algorithms &amp; Foundations
+        </p>
+
+        <h1>Algorithms &amp; Foundations</h1>
+        <p>
+          The <a href="Signoff-First-Routing.html">problem setup</a> invokes
+          several mechanisms by name. This page derives each one from first
+          principles and states precisely <em>what it changes</em> in the Philis
+          formulation — which decision variable, cost term, feasibility predicate,
+          or soundness argument it touches. Nothing here is a gate: these populate
+          the soft tail, the search efficiency, and the evidence fidelity of an
+          already-fixed feasibility structure.
+        </p>
+
+        <div class="note">
+          <strong>Reading order.</strong> Engines 1–3 of the
+          <a href="Signoff-First-Routing.html#search-repair">search-and-repair
+          loop</a> are: exact-local (§3, §9), negotiated congestion (§1), and
+          maze A* (§7). The rest are priors, assignment oracles, data structures,
+          and in-loop physics that feed those three.
+        </p>
+
+        <hr />
+
+        <h2 id="negotiated">1. Negotiated-congestion present/history cost</h2>
+        <p>
+          This is the routability backbone of engine 2 — an <em>auction with
+          memory</em>. Each resource edge carries a cost
+        </p>
+        <pre><code>cost(e) = (b(e) + h(e)) * p(e)</code></pre>
+        <p>
+          where <code>b(e)</code> is the base cost (the length/parasitic/via cost
+          the oracles already attach via <code>attr(e)</code>), <code>h(e)</code>
+          is history, and <code>p(e)</code> the present-sharing penalty:
+        </p>
+        <pre><code>p(e)       = 1 + max(0, occ(e) - cap(e)) * p_fac
+h^{i+1}(e) = h^i(e) + h_fac * max(0, occ(e) - cap(e))     (h_fac &gt; 0)</code></pre>
+        <p>
+          <code>occ(e)</code> is the current occupancy, <code>cap(e)</code> the
+          capacity (1 for an exclusive detailed edge, larger for a global tile).
+          <code>p_fac</code> is raised across iterations so early passes explore
+          freely and later passes forbid sharing. Because <code>h(e)</code> is
+          <em>monotone non-decreasing</em>, a resource contested at iteration
+          <code>i</code> stays expensive at <code>i+1</code> — this is the
+          convergence guard of the
+          <a href="Signoff-First-Routing.html#convergence">termination
+          argument</a>. The loop ends when no edge has
+          <code>occ(e) &gt; cap(e)</code> or a budget fires; overflow
+          (<code>occ(e) &gt; cap(e)</code>) is one of the marker sources that
+          seeds <code>scope(V)</code>.
+        </p>
+
+        <h2 id="steiner">2. Rectilinear Steiner trees (FLUTE / GeoSteiner)</h2>
+        <p>
+          Before detailed search commits tracks, each net needs a cheap, accurate
+          two-dimensional <em>topology prior</em> and a wirelength lower bound. The
+          rectilinear Steiner minimal tree (RSMT) connects pins with H/V wire of
+          minimum length, possibly adding Steiner points. An optimal RSMT always
+          has its Steiner points on the <strong>Hanan grid</strong> — the
+          <code>O(d²)</code> lattice from drawing an H and V line through every
+          pin.
+        </p>
+        <p>
+          <strong>FLUTE</strong> makes low-degree RSMT essentially free. For a net
+          of degree <code>d</code>, encode only the pins' relative orderings (a
+          "position sequence"). Within a class, an optimal RSMT's length is a fixed
+          linear combination of the gaps between adjacent sorted coordinates:
+        </p>
+        <pre><code>L = sum_i a_i * h_i  +  sum_j b_j * v_j</code></pre>
+        <p>
+          The finite set of optimal <code>(a_i, b_j)</code> vectors is the
+          potentially-optimal-wirelength-vector (POWV) set; FLUTE precomputes
+          POWVs + topologies for degree ≤ 9, so a net is a table lookup plus a dot
+          product (optimal for <code>d ≤ 9</code>, ~1% off for larger after
+          net-breaking). <strong>GeoSteiner</strong> is the exact
+          branch-and-bound complement for the small, high-value nets where the 1%
+          matters — a matched trunk, an RF symmetric tree, a power spine.
+        </p>
+        <p>
+          <strong>Maps onto Philis:</strong> (i) the global planner seeds each net
+          with its FLUTE tree so congestion estimation sees realistic demand;
+          (ii) <code>Phi_pex</code> gets an <em>achievable-resistance floor</em>
+          per net, so a soft PEX outlier is distinguishable from an unavoidable
+          one; (iii) matched/symmetric groups are planned as paired Steiner trees
+          with a common template, giving the
+          <a href="Signoff-First-Routing.html#group-invariant">group invariant</a>
+          a geometric target. These are priors and bounds, never gates.
+        </p>
+
+        <h2 id="mcf">3. Integer multicommodity flow &amp; LP rounding</h2>
+        <p>
+          This is the theory behind the
+          <a href="Signoff-First-Routing.html#connectivity">route-state-invariant
+          default</a>. Treat each net as a commodity shipping one unit from a root
+          to each selected access candidate. The <em>fractional relaxation</em>
+          replaces <code>x[n,e] ∈ {0,1}</code> with <code>x[n,e] ∈ [0,1]</code>
+          and solves an LP: minimize weighted edge usage subject to per-commodity
+          flow conservation and <code>sum_n flow(n,e) ≤ cap(e)</code>. This is
+          polynomial and yields a fractional ("smeared") routing.
+        </p>
+        <p>
+          <strong>Randomized rounding</strong> turns it integral with a provable
+          guarantee: interpret each net's fractional path weights as a probability
+          distribution, pick one path per net independently, and the integral
+          congestion exceeds optimal by at most an
+          <code>O(log|V| / log log|V|)</code> factor w.h.p. (a Chernoff bound —
+          each edge load is a sum of independent indicators concentrating around
+          its fractional load).
+        </p>
+        <p>
+          <strong>Maps onto Philis:</strong> the global planner can solve the
+          fractional LP on the coarse tile graph for a principled,
+          congestion-balanced demand map and net order; the
+          <code>O(log/log log)</code> bound is the formal answer to "how bad can
+          congestion get" that the budget-bounded negotiated loop approximates.
+          The exact ILP mode is the un-relaxed version, invoked only where
+          integrality must be <em>proved</em>.
+        </p>
+        <p>
+          <strong>Matching as min-cost flow / optimal transport.</strong> The same
+          machinery assigns paired/grouped terminals to access points so a
+          matching objective (equal length, equal parasitic neighborhood, mirrored
+          geometry) is met: cast the two halves of a group as a bipartite graph
+          with edge cost = the imbalance that pairing incurs; the minimum-cost
+          perfect matching (Hungarian / min-cost flow, optimal transport in the
+          continuous limit) is the globally imbalance-minimizing pairing. It feeds
+          engine 1 as an assignment oracle, leaving the group repair loop only the
+          residual to equalize.
+        </p>
+
+        <h2 id="pin-access">4. Pin-access oracle mechanics</h2>
+        <p>
+          A pin is a <em>shape on one or more layers</em>, not a point. The oracle
+          enumerates <strong>access points (APs)</strong> — legal
+          <code>(layer, point, via-stack)</code> triples — then chooses a
+          DRC-clean, mutually compatible subset:
+        </p>
+        <ol>
+          <li>for each pin shape, generate candidate APs on-track first (preferred-direction grid intersections inside the shape), then off-track and via-in-pin fallbacks;</li>
+          <li>run the <em>local</em> rule oracle on each (enclosure, cut spacing, min-area, EOL, same-net notch) to keep only DRC-clean APs, attaching confidence and parasitic access cost;</li>
+          <li>build an <strong>access-conflict graph</strong> (vertices = APs, edges = pairs that cannot coexist), precomputed once;</li>
+          <li>select one AP per terminal with no two selected APs in conflict.</li>
+        </ol>
+        <p>
+          Step 4 is a small exact problem (independent-set / SAT selection) —
+          which is why engine 1 owns it: a greedy per-pin choice can paint a later
+          pin into an unroutable corner (the net-ordering pathology), whereas an
+          incremental-SAT/ILP selection over the precomputed conflict graph finds a
+          globally compatible set or proves none exists. The result is
+          <code>A_t</code> with its ranking and a <em>proof</em> the chosen
+          patterns are DRC-clean before any maze step — the precondition the
+          <a href="Signoff-First-Routing.html#soundness">incremental-DRC
+          soundness</a> argument assumes. For analog, each AP also records its
+          symmetry/matching equivalence class (so the exact selection can pick
+          mirrored APs for a differential pair) and each terminal exposes a
+          multiport set across layers (so a current-carrying net can claim a via
+          array, not a single stack).
+        </p>
+
+        <h2 id="track">5. Track assignment</h2>
+        <p>
+          Between coarse global routing and edge-by-edge detailed search sits track
+          assignment: turn each net's per-tile global wire into a specific
+          <strong>track</strong> for the long straight "trunk" segments, leaving
+          only short jogs and pin connections to the detailed router. Per routing
+          panel, collect the long wire segments (iroutes) that must cross it; the
+          cost of assigning iroute <code>i</code> to track <code>t</code> combines
+          its wrong-way extension, blockage overlaps, and — critically for analog —
+          its coupling to adjacent occupied tracks. Assign all iroutes in a panel
+          minimizing total cost (an interval-packing/assignment problem).
+        </p>
+        <p>
+          <strong>Maps onto Philis:</strong> two analog cost terms become
+          first-class here. (i) <em>Coupling-aware track choice</em>: the
+          adjacent-track coupling cost is exactly the <code>Cc_window</code>
+          attribute and the <code>gamma_nm·Cc</code> term, so assigning a sensitive
+          net to a quiet-neighbor track (or reserving the neighbor as a shield,
+          <code>sh[n,e]</code>) reduces <code>Phi_pex</code> before detailed
+          routing freezes it. (ii) <em>Matched-group track symmetry</em>: a
+          differential pair or matched array is assigned to symmetric tracks about
+          its axis in one joint step, the track-level realization of the group
+          invariant. The payoff is clip-locality: detailed routing repairs short
+          regions, not whole trunks.
+        </p>
+
+        <h2 id="corner-stitch">6. Corner stitching</h2>
+        <p>
+          Every incremental DRC delta and local AP check asks the same low-level
+          questions thousands of times: what shape is at this point, what shapes
+          lie within this window, who are this tile's neighbors. Corner stitching
+          makes these near-constant-time by tiling the whole plane — including
+          empty space, as explicit maximal-horizontal-strip <em>space tiles</em> —
+          with non-overlapping rectangles, each storing four "stitch" pointers at
+          two opposite corners. From these it supports <strong>point finding</strong>
+          (walk diagonally toward the query, cost ∝ local tile distance, not
+          database size), <strong>neighbor enumeration</strong> (walk a tile edge
+          via stitches), and <strong>area search</strong> (point-find then sweep).
+          Insertion/deletion/stretching are local stitch surgery.
+        </p>
+        <p>
+          <strong>Maps onto Philis:</strong> it is the backing store that makes the
+          <a href="Signoff-First-Routing.html#soundness">bounded-influence</a>
+          incremental DRC cheap — an area search over the dilation of the changed
+          region by <code>r_max</code> enumerates exactly the shapes whose legality
+          could change, in time proportional to that region. The explicit space
+          tiles let the access oracle ask "is there a legal empty landing pad here"
+          without scanning all obstacles. It changes no decision variable; it makes
+          clip-local verification affordable.
+        </p>
+
+        <h2 id="alt">7. A* with landmarks (ALT)</h2>
+        <p>
+          Engine 3 is detailed A*/maze search, which needs an <em>admissible</em>
+          heuristic to stay optimal and fast. Philis's edges carry
+          <em>non-Euclidean</em> cost — via penalties, per-layer resistance,
+          coupling windows, history surcharges — so Manhattan distance is either
+          loose (slow) or, if scaled, inadmissible (wrong). <strong>ALT</strong>
+          (A*, Landmarks, Triangle inequality) gives a provably admissible
+          heuristic for <em>any</em> metric: pick a few landmark vertices,
+          precompute exact distances to/from each, and lower-bound
+        </p>
+        <pre><code>d(u,v) &gt;= max_L | d(u,L) - d(v,L) |</code></pre>
+        <p>
+          Because it uses real graph distances (not an embedding) it is admissible
+          on the actual cost graph including via/coupling costs, and it tightens A*
+          exactly around blockages and dense channels where maze routing spends its
+          budget. Landmarks are recomputed only on structural graph change and
+          reused across a repair pass's many rip-up/reroute queries; bidirectional
+          ALT halves the explored frontier on point-to-point pin connections. This
+          changes no feasibility predicate — only how cheaply engine 3 finds the
+          same legal minimum-cost path.
+        </p>
+
+        <h2 id="peec">8. PEEC / RLGC and return-path reasoning</h2>
+        <p>
+          For RF/mm-wave and fast edges, a lumped <code>R, Cg, Cc</code> model is
+          not enough — inductance and the <em>return current path</em> dominate. A
+          segment is modeled per-unit-length by four parameters — series
+          resistance <code>R</code> and inductance <code>L</code>, shunt
+          conductance <code>G</code> and capacitance <code>C</code> (the
+          <strong>RLGC</strong> model) — giving characteristic impedance
+        </p>
+        <pre><code>Z_0 = sqrt( (R + jwL) / (G + jwC) )</code></pre>
+        <p>
+          which is why an RF transmission-line net constrains <em>length, bend
+          count, and a continuous reference plane</em>, not just total wire.
+          Current returns through the nearest low-impedance path; the loop the
+          forward+return current encloses sets inductance and coupling, so a gap in
+          the reference plane under a fast net spikes inductance and crosstalk.
+          <strong>PEEC</strong> (Partial Element Equivalent Circuit) discretizes
+          each conductor into cells and derives partial resistances, partial
+          self/mutual inductances, and capacitive potential coefficients; "partial"
+          means loop inductance emerges from summing partials around the closed
+          forward/return loop — exactly what lets an in-loop extractor score a
+          <em>candidate</em> route's inductive coupling and return-path quality
+          incrementally.
+        </p>
+        <p>
+          <strong>Maps onto Philis:</strong> the <code>EM_n</code>/coupling terms
+          of <code>Phi_pex</code> gain inductive-coupling and
+          return-path-discontinuity components for RF nets; "continuous reference
+          plane under the trunk" and "bounded bend count" become checkable bounded
+          objectives (promotable to hard); shield insertion (<code>sh[n,e]</code>)
+          is justified as <em>return-path provisioning</em>, not just capacitive
+          screening. The certificate records the surrogate's delta to a signoff
+          field solver where one exists.
+        </p>
+
+        <h2 id="em">9. Electromigration: Black's equation &amp; the Blech length</h2>
+        <p><strong>Black's equation</strong> gives mean time to failure of a current-carrying segment:</p>
+        <pre><code>MTTF = (A / J^n) * exp( E_a / (k_B * T) )</code></pre>
+        <p>
+          <code>J</code> is current density, <code>n</code> the current-density
+          exponent (~1 when void growth dominates, ~2 when nucleation does),
+          <code>E_a</code> the activation energy (larger for Cu than Al, so Cu BEOL
+          tolerates higher <code>J</code>). MTTF falls steeply with <code>J</code>,
+          so a segment carrying current <code>I</code> needs width/via-count such
+          that <code>J = I / (w·thickness)</code> stays under <code>J_max</code> —
+          this is EM-aware wire sizing, and
+          <code>EM_margin = J_max/J − 1</code> is the
+          <code>em_margin_min</code> field of <code>RouteQuality</code>.
+        </p>
+        <p>The <strong>Blech effect</strong> prevents needless over-sizing:</p>
+        <pre><code>(J * L) &lt; (J*L)_crit   =&gt;   segment is "EM-immortal"</code></pre>
+        <p>
+          Below a critical current-density × length product, mechanical back-stress
+          cancels the EM driving force and electromigration does not occur at all,
+          so a short trunk can legally carry a density fatal in a long one.
+        </p>
+        <p>
+          <strong>Maps onto Philis:</strong> the width-class variable
+          <code>w[n,e,c]</code> and via-array count are chosen so every segment is
+          either Blech-immortal or has <code>EM_margin ≥ 0</code> under Black's
+          equation at the declared current; segments failing both are EM markers
+          that seed <code>scope(V)</code> for re-sizing or re-topology, never
+          silent acceptance. The promoting authority (PDK reliability rule vs. user
+          current declaration) is recorded in the certificate.
+        </p>
+
+        <h2 id="multipattern">10. Multipatterning conflict-graph coloring</h2>
+        <p>
+          On colored/multipatterned nodes, color assignment and decomposability are
+          <em>routing variables</em> (<code>col[n,e,p]</code>,
+          <code>mask[n,e,p]</code>, <code>st[n,e]</code>). Build a
+          <strong>conflict graph</strong>: one vertex per feature on the
+          multipatterned layer, an edge between two features whose spacing is below
+          the single-mask minimum (they must go on different masks). Assigning masks
+          is graph coloring, one color per mask:
+        </p>
+        <ul>
+          <li>
+            <strong>Double patterning (2 masks)</strong> = 2-coloring, decidable in
+            linear time by BFS; a graph is 2-colorable iff it has no
+            <strong>odd cycle</strong>. An odd cycle no allowed stitch can break is
+            a <strong>native conflict</strong> — a hard infeasibility geometry must
+            change to resolve.
+          </li>
+          <li>
+            A <strong>stitch</strong> splits a feature into two touching pieces that
+            may take different colors, breaking a cycle at a yield/overlay cost — so
+            the real objective is <em>minimize conflicts then stitches</em> (an ILP
+            / minimum-odd-cycle-cover).
+          </li>
+          <li>
+            <strong>Triple patterning (3 masks)</strong> = 3-coloring, NP-complete;
+            solved exactly only on small clips, heuristically otherwise.
+          </li>
+        </ul>
+        <p>
+          <strong>Maps onto Philis:</strong> the exact-engine assignment of
+          <code>col</code>/<code>mask</code>/<code>st</code> is precisely this
+          coloring/stitch-minimization ILP on the decision-dense clip — which is
+          why advanced-node legality is a discrete problem the negotiated/maze
+          engines cannot prove alone. A native conflict is its own
+          <a href="Signoff-First-Routing.html#diagnosis">diagnosis class</a> and
+          its own infeasibility core, never hidden as ordinary DRC. The linear-time
+          2-coloring check is cheap enough to run as an incremental delta on each
+          commit.
+        </p>
+
+        <h2 id="rbs">11. Rubber-band / topological sketch routing</h2>
+        <p>
+          Analog routing benefits from reasoning about <em>which side of an
+          obstacle</em> a wire passes — its <strong>homotopy class</strong> —
+          before committing coordinates. <strong>Rubber-band sketch (RBS)</strong>
+          represents each wire as an elastic band that, given a topological ordering
+          of left/right obstacle passages, relaxes to its shortest realizable
+          geometry. Two wires in the same homotopy class space and order freely;
+          changing class means crossing an obstacle, a discrete decision.
+        </p>
+        <p>
+          <strong>Maps onto Philis:</strong> RBS is the global-topology
+          representation for cases where the rigid track grid is too restrictive —
+          symmetric and common-centroid escapes, RF trunks wanting gentle bends,
+          matched pairs that must stay equidistant. Planning a matched pair as two
+          rubber bands in mirrored homotopy classes gives the group invariant a
+          topology-level target that is <em>naturally symmetric</em> before any
+          track is chosen, reducing the residual skew detailed routing must
+          equalize. It is the formal object behind "topology templates" in the
+          <a href="Signoff-First-Routing.html#taxonomy">case taxonomy</a>; the rule
+          oracle still proves the snapped result legal.
+        </p>
+
+        <h2 id="ml">12. Honest framing of learning-guided routing</h2>
+        <p>
+          Learning-guided routers (generative-network or graph-neural-network
+          guidance trained on expert analog layouts) predict <em>where</em> wires
+          of each class are likely to go — a learned prior over routing regions and
+          net ordering. The output biases the base cost <code>b(e)</code> of engine
+          2 and the net order of engines 1/3. The hard boundary: a learned prior
+          may change <em>which legal route is found first or preferred</em>, but it
+          can <strong>never</strong> relax a feasibility gate — DRC, LVS,
+          connectivity, and promoted EM/IR gates remain rule- and extraction-proved.
+          A miscalibrated prior on an unseen PDK can only slow convergence or worsen
+          a soft score, never produce an unsound certificate, because every accepted
+          edge still passes the exact oracles. This is the only safe way to admit ML
+          into a signoff-first formulation, and it lives in the soft/ordering layer
+          of the hierarchy, never in the hard vector.
+        </p>
+
+        <h2 id="summary">Summary — what each import changes</h2>
+        <table>
+          <thead><tr><th>Concept</th><th>What it changes in the formulation</th></tr></thead>
+          <tbody>
+            <tr><td>Negotiated congestion</td><td><code>cost(e)</code> of engine 2; monotone <code>h(e)</code> is the convergence guard; overflow seeds <code>scope(V)</code></td></tr>
+            <tr><td>FLUTE / GeoSteiner</td><td>topology prior + resistance/length floor for <code>Phi_pex</code>; paired Steiner templates for matched groups</td></tr>
+            <tr><td>Integer MCF + LP rounding</td><td>the theory behind the route-state invariant and the global demand map</td></tr>
+            <tr><td>Pin-access oracle</td><td>makes <code>A_t</code> constructive; access-conflict graph is engine-1's exact selection</td></tr>
+            <tr><td>Track assignment</td><td>coupling-aware (<code>Cc_window</code>, <code>sh</code>) and symmetric track choice before detailed routing</td></tr>
+            <tr><td>Corner stitching</td><td>backing store making bounded-influence delta and area search cheap</td></tr>
+            <tr><td>ALT admissible A*</td><td>admissible heuristic on the non-Euclidean <code>attr(e)</code> cost graph for engine 3</td></tr>
+            <tr><td>PEEC / RLGC / return path</td><td>inductive-coupling + return-path terms in <code>EM_n</code>/coupling for RF/HV nets</td></tr>
+            <tr><td>Black's eq. + Blech length</td><td>EM-aware <code>w[n,e,c]</code>/via-array sizing; <code>em_margin_min</code>; immortality filter avoids over-sizing</td></tr>
+            <tr><td>Multipatterning coloring</td><td>concrete <code>col</code>/<code>mask</code>/<code>st</code> ILP; native conflict as its own infeasibility core</td></tr>
+            <tr><td>Rubber-band sketch</td><td>homotopy-level symmetric planning template for matched/RF nets</td></tr>
+            <tr><td>Learning-guided priors</td><td>bias <code>b(e)</code> and net order only; never a gate</td></tr>
+          </tbody>
+        </table>
+        <p>
+          None of these alters the canonical coverage vocabulary, the ownership
+          boundary, or the lexicographic hard vector. They populate the soft tail,
+          the search efficiency, and the evidence fidelity of an already-fixed
+          feasibility structure — the discipline a signoff-first formulation
+          requires.
+        </p>
+      </main>
+    </div>
+
+    <footer class="site-footer">Philis &middot; Analog Layout Engine</footer>
+      <script src="../../nav.js"></script>
+  </body>
+</html>

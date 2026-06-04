@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Canonical Model &amp; Identity — Philis</title>
+    <link rel="stylesheet" href="../../style.css" />
+    <link rel="icon" type="image/svg+xml" href="../../brand.svg" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../../index.html">
+        <img src="../../brand.svg" alt="Philis" />
+        Philis
+      </a>
+      <nav class="top-nav">
+        <a href="../../index.html">Home</a>
+        <a href="../../Usage/getting-started.html">Usage</a>
+        <a href="../api/index.html" class="active">Developer</a>
+        <a href="https://github.com/OmarSiwy/Philis">GitHub</a>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <h4>Developer</h4>
+        <ul>
+          <li><a href="../api/index.html">API</a></li>
+          <li><a href="../geom/index.html">Geometry</a></li>
+          <li><a href="../tech/index.html">Technology</a></li>
+          <li><a href="../verify/index.html">Verify</a></li>
+          <li><a href="../solver/index.html">Solver</a></li>
+          <li><a href="../place/index.html">Place</a></li>
+          <li><a href="../route/index.html">Route</a></li>
+          <li>
+            <a href="../constraints/index.html" class="active">Constraints</a>
+          </li>
+        </ul>
+        <h4>Constraints</h4>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="model.html" class="active">Canonical Model &amp; Identity</a></li>
+          <li><a href="technology-coverage.html">PDK Technology &amp; Coverage</a></li>
+          <li><a href="gates-and-quality.html">Gates &amp; Quality</a></li>
+          <li><a href="projections-certificate.html">Projections, Evidence &amp; Certificate</a></li>
+        </ul>
+        <h4>Usage</h4>
+        <ul>
+          <li>
+            <a href="../../Usage/getting-started.html">Getting Started</a>
+          </li>
+          <li><a href="../../Usage/installation.html">Installation</a></li>
+        </ul>
+      </aside>
+
+      <main class="content">
+        <p class="breadcrumb">
+          <a href="../../index.html">Home</a> / Developer /
+          <a href="index.html">Constraints</a> / Canonical Model
+        </p>
+
+        <h1>Canonical Model &amp; Identity</h1>
+        <p>
+          Everything downstream rests on three closed vocabularies — the
+          <a href="#class">obligation class</a>, the
+          <a href="#coverage">coverage value</a>, and the
+          <a href="#tuple">constraint tuple</a> — plus one
+          <a href="#identity">deterministic identity scheme</a>. They are owned
+          here and reused, never redefined, by placement, routing, and analysis.
+        </p>
+
+        <h2 id="class">Obligation class — how the <em>design</em> treats it</h2>
+        <p>
+          The class is a closed seven-variant enum. Extending it is an additive,
+          coordinated change to this single owner — never a per-consumer local
+          addition, because that is the only way projection soundness can hold
+          across stages.
+        </p>
+        <pre><code>ObligationClass =
+  Hard | Joint | Bounded | Soft | Unsupported | ExternalOnly | ManualReview</code></pre>
+        <table>
+          <thead><tr><th>Variant</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>Hard</code></td><td>a violation makes the candidate unacceptable.</td></tr>
+            <tr><td><code>Joint</code></td><td>members must be solved or repaired together — a <em>global</em> constraint (a common-centroid array, an interdigitated bank, a differential pair). Joint feasibility cannot be recovered from independent pairwise constraints, which is why this is a first-class class with a group-preserving repair scope.</td></tr>
+            <tr><td><code>Bounded</code></td><td>a metric must stay within a numerical or categorical bound (PEX coupling, IR drop, EM margin, match delta).</td></tr>
+            <tr><td><code>Soft</code></td><td>optimized only after every hard and bounded gate passes.</td></tr>
+            <tr><td><code>Unsupported</code></td><td>not expressible with current coverage; must be refused or explicitly downgraded by policy.</td></tr>
+            <tr><td><code>ExternalOnly</code></td><td>trusted only after an external deck supplies evidence.</td></tr>
+            <tr><td><code>ManualReview</code></td><td>requires human or foundry-note evidence before any signoff-quality claim.</td></tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <strong>These are evidence <em>locations</em>, not softness levels.</strong>
+          A required <code>ExternalOnly</code> or <code>ManualReview</code>
+          obligation blocks a signoff-quality claim until its evidence is
+          attached. Do not conflate them with <code>Soft</code>.
+        </div>
+
+        <h2 id="coverage">Coverage — what the <em>technology</em> can check</h2>
+        <p>
+          Coverage is a nine-valued enum, never a boolean “supported”. A boolean
+          collapses three distinct, dangerous situations —
+          <em>Approximate</em> (a calibrated model that may be wrong by a known
+          margin), <em>ExternalOnly</em> (correct only once a signoff deck runs),
+          and <em>ManualReview</em> (a guideline a human must sign) — into one,
+          and lets a layout look “fully supported” because the unsupported rules
+          were simply never modeled. That is the single most common way to
+          overclaim signoff readiness on a sparse PDK.
+        </p>
+        <pre><code>Coverage =
+  Coded | Partial | Approximate | ExternalOnly | ManualReview |
+  RecommendedOnly | Unsupported | Missing | Contradictory</code></pre>
+        <p>
+          Crucially, <em>coverage</em> describes what the technology can check;
+          <em>class</em> describes how the design must treat the obligation. They
+          are orthogonal and must not be merged. A <code>RecommendedOnly</code>
+          coverage (the PDK offers a rule but does not enforce it) is different
+          from a <code>Soft</code> class (the design prefers but does not require
+          a property); an <code>ExternalOnly</code> coverage (we have no internal
+          check) is different from an <code>ExternalOnly</code> class (the
+          obligation is trusted only after a deck runs).
+        </p>
+        <p>
+          Coverage forms an <strong>abstract domain</strong> ordered from
+          <code>Coded</code> (most information) down to
+          <code>Missing</code>/<code>Contradictory</code> (least / negative
+          information). The merge of two views is the lattice <em>meet</em>: when
+          views disagree or a value is unknown, the result moves <em>toward</em>
+          <code>Missing</code>/<code>Contradictory</code>, never toward
+          <code>Coded</code>. That conservative direction is the soundness
+          condition that guarantees the certificate cannot certify a gap it
+          failed to model. The merge and its MCMM keying live on the
+          <a href="technology-coverage.html">PDK Technology &amp; Coverage</a>
+          page.
+        </p>
+
+        <h2 id="tuple">The constraint tuple</h2>
+        <p>
+          Every canonical constraint is a typed tuple. <code>id</code> is stable
+          across deterministic recompilation; the remaining fields carry meaning,
+          provenance, and evidence semantics.
+        </p>
+        <pre><code>c = (id, scope, entities, predicate, class, bound, source,
+     confidence, coverage, consumers, evidence, repair, waiver)</code></pre>
+        <table>
+          <thead><tr><th>Field</th><th>Role</th></tr></thead>
+          <tbody>
+            <tr><td><code>id</code></td><td>content-addressed identity, <code>c_&lt;hex64&gt;</code> (see <a href="#identity">below</a>).</td></tr>
+            <tr><td><code>scope</code></td><td>global, hierarchical, block-, device-, net-, terminal-, region-, or host-template-local.</td></tr>
+            <tr><td><code>entities</code></td><td>canonical device / net / terminal / pin / region / layer / rule / analysis objects, <strong>sorted</strong>.</td></tr>
+            <tr><td><code>predicate</code></td><td>a symbolic / typed function over layout state and evidence.</td></tr>
+            <tr><td><code>class</code></td><td>one of the seven <a href="#class">obligation classes</a>.</td></tr>
+            <tr><td><code>bound</code></td><td>a numerical or categorical limit, for <code>Bounded</code> obligations.</td></tr>
+            <tr><td><code>source</code></td><td>provenance: an <a href="#authority">authority</a> + a stable source ID.</td></tr>
+            <tr><td><code>confidence</code></td><td>fixed-point confidence — inference is statistical and can be wrong, so the graph records uncertainty rather than erasing it.</td></tr>
+            <tr><td><code>coverage</code></td><td>the nine-valued <a href="#coverage">coverage</a>.</td></tr>
+            <tr><td><code>consumers</code></td><td>which of placement / routing / analysis / export / human-review must receive this obligation.</td></tr>
+            <tr><td><code>evidence</code></td><td>the evidence domains required before discharge (DRC, LVS, PEX, EM, …).</td></tr>
+            <tr><td><code>repair</code></td><td>how a violation is localized: group repair, single-device, net reroute, terminal-access regeneration, PDK gap, template conflict, or no auto-repair.</td></tr>
+            <tr><td><code>waiver</code></td><td><code>None</code>, or a guarded, non-deleting <a href="projections-certificate.html#inv2">waiver annotation</a>.</td></tr>
+          </tbody>
+        </table>
+
+        <h2 id="authority">Authority and waiver precedence</h2>
+        <p>
+          Contradiction handling needs an explicit trust order. Without one, a
+          conflict between an inferred symmetry and a foundry mandatory rule has
+          no principled resolution and gets settled by accident of iteration
+          order. The default precedence, highest first:
+        </p>
+        <pre><code>foundry mandatory rule or trusted signoff deck
+  &gt; host-template or package / shuttle contract
+  &gt; explicit user hard constraint
+  &gt; explicit user bounded constraint
+  &gt; generated primitive / library contract
+  &gt; inferred hard intent
+  &gt; inferred bounded or soft intent
+  &gt; heuristic repair preference</code></pre>
+        <p>
+          A waiver does not delete an obligation; it records an authority, scope,
+          expiration/applicability condition, and evidence domain. Waiving a
+          foundry or host-template hard rule is permitted only if the waiver
+          authority is at least as high as the rule authority. The full
+          admissibility rule is <a href="projections-certificate.html#inv2">Invariant 2</a>.
+        </p>
+
+        <h2 id="facts">The canonical fact graph</h2>
+        <p>
+          Before any intent is compiled, fact extraction normalizes the
+          schematic, hierarchy, devices, terminals, nets, host-template objects,
+          fixed geometry, and prior-analysis snapshots into one canonical graph
+          with <strong>sorted, stable names</strong>. Canonicalization — sorting
+          hierarchy paths, normalized net names, and device terminal roles before
+          any detector runs — is the precondition that makes the identity scheme
+          below deterministic. If an input lacks stable names, the certificate
+          marks deterministic replay as degraded rather than corrupting IDs.
+        </p>
+
+        <h2 id="intentgraph">The IntentGraph</h2>
+        <p>
+          All intent — user, inferred, PDK-derived, host-derived — is compiled
+          into one typed <code>IntentGraph</code>, and every consumer reads
+          <em>projections</em> of it. Using a single canonical graph is what makes
+          “did routing honor the placer's intent?” a checkable set-equality rather
+          than an unanswerable question: when placement and routing each re-infer
+          intent from strings or geometry, they drift, and a repair correct for
+          one breaks the other.
+        </p>
+        <p>The graph carries, at minimum, these intent families:</p>
+        <ul>
+          <li>primitive legality, device generation, terminal ordering, imported-cell equivalence;</li>
+          <li>symmetry, self-symmetry, hierarchical symmetry, ordering, alignment, proximity, spread, same-template, same-orientation;</li>
+          <li>matching, ratioed matching, interdigitation, common centroid, unit arrays, dummies, gradient-cancellation order;</li>
+          <li>current mirrors, cascodes, bias chains, signal/current flow, parallel current paths;</li>
+          <li>differential pairs, matched nets, length matching, parasitic matching, skew, paired terminal access;</li>
+          <li>sensitive / critical nets, shields, low-noise &amp; high-impedance nodes, aggressor/victim budgets;</li>
+          <li>power, ground, clock, substrate, bulk, guard, tap, latch-up, isolation, deep-nwell, domain-crossing;</li>
+          <li>high-voltage, ESD, over-device routing, thick-metal, slotting, voltage-dependent spacing;</li>
+          <li>RF, inductors, transmission-line-like nets, passives, keepouts, substrate coupling, thermal;</li>
+          <li>host-template bindings, fixed pins, padframes, rails, wrappers, imported GDS, seal rings, export naming, reserved layers;</li>
+          <li>DRC, LVS, PEX, EM, ERC, antenna, density, fill, CMP, lithography, color, and manual-review obligations.</li>
+        </ul>
+
+        <h2 id="identity">Deterministic, content-addressed identity</h2>
+        <p>
+          IDs are a hash of the obligation's <em>semantic content</em>, not of its
+          discovery order. The compiler serializes an identity preimage from only
+          the fields that define what the obligation <em>means</em> — class,
+          scope, predicate, bound, source, coverage, consumer mask, repair policy,
+          waiver, confidence, the <strong>sorted</strong> entity list, and the
+          <strong>sorted</strong> required-evidence domains — then hashes it:
+        </p>
+        <pre><code>id(c) = "c_" || hex64( H( canonical_preimage(c), seed ) )
+
+canonical_preimage(c) = stable_serialize(
+    class, scope, predicate, bound, source, coverage,
+    consumers, repair, waiver, confidence,
+    sort(entities), sort(evidence.required_domains))</code></pre>
+        <p>Three properties make the scheme load-bearing:</p>
+        <ol>
+          <li>
+            <strong>Position independence.</strong> Because the preimage is built
+            from sorted sets and semantic fields rather than detector iteration
+            order, two compilations that discover the same obligation in different
+            orders produce the same ID. Identity is a function of meaning, not
+            schedule.
+          </li>
+          <li>
+            <strong>Collision-as-merge.</strong> Two detectors that infer the
+            <em>same</em> obligation collide to the same ID by construction — the
+            desired behavior: the obligation is deduplicated while its multiple
+            provenances are recorded as evidence edges. Genuinely distinct
+            obligations differ in at least one semantic field and hash apart.
+          </li>
+          <li>
+            <strong>Seed separation.</strong> The tie-break <code>seed</code>
+            participates in the preimage but is persisted in tuple metadata, never
+            in the obligation payload, so re-seeding for adversarial-replay testing
+            changes IDs predictably without altering semantics.
+          </li>
+        </ol>
+        <p>
+          The reference build uses an FNV-1a 64-bit mixer; the production build
+          substitutes a cryptographic digest (e.g. BLAKE3) so IDs are stable
+          across architectures and resistant to accidental preimage collisions.
+          The hash family is recorded in the certificate so replay detects a
+          tool-version mismatch rather than silently comparing IDs from
+          incompatible schemes. The same discipline names derived artifacts:
+          contradiction cores hash their sorted member-ID list plus a reason tag
+          (<code>core_&lt;hash&gt;</code>), so a core's identity is stable across
+          runs and across the order conflicts were detected in.
+        </p>
+
+        <h3>Content addressing is a Merkle discipline</h3>
+        <p>
+          The scheme is an instance of content addressing — the same discipline
+          that gives Git commits and IPFS objects their names. An object's name is
+          the cryptographic hash of its own content; when an object references
+          children, its hash covers its payload <em>together with the children's
+          hashes</em>. A certificate that records the root hash of the obligation
+          graph thereby commits to <em>every</em> obligation, core, and evidence
+          edge beneath it: a replay that recomputes the root and gets a different
+          value can localize the divergence by walking the DAG, turning the
+          determinism claim into a constructive audit.
+        </p>
+
+        <h3>Symmetry-class canonicalization by color refinement</h3>
+        <p>
+          A subtle determinism hazard is <em>symmetric</em> structure: a
+          differential pair or a current-mirror bank presents many structurally
+          interchangeable devices, and a naive scheme would give their obligations
+          IDs that depend on which device the detector visited first. The remedy
+          is <strong>color refinement</strong> (the 1-dimensional
+          Weisfeiler–Leman procedure): each vertex starts with a color from its
+          intrinsic attributes (device type, model, terminal roles), then iterates
+          — a vertex's new color is the hash of its old color paired with the
+          <em>multiset</em> of neighbor colors — until two vertices share a color
+          iff they are indistinguishable. Group members are canonicalized to their
+          refined colors before the entity list is sorted and hashed, so a group
+          obligation's ID is a function of structure, not iteration order.
+        </p>
+        <div class="note warn">
+          <strong>Honest expressiveness bound.</strong> 1-WL is incomplete: there
+          exist non-isomorphic graphs it cannot tell apart, and the message-passing
+          GNN symmetry extractors are no more discriminating than 1-WL. The compiler
+          therefore treats a color-refinement match as a <em>strong structural
+          hypothesis</em> carrying a <code>confidence</code>, never as a proof of
+          interchangeability — which is exactly why every inferred obligation
+          carries provenance and confidence rather than a boolean.
+        </div>
+
+        <h2 id="mapping">Mapping the <code>philis</code> <code>Constraint</code> taxonomy</h2>
+        <p>
+          The current public API exposes a flat <code>Constraint</code> enum
+          (<code>crates/api/src/core.rs</code>) with 22 variants, split by
+          <code>is_engine_supported()</code> into 10 “engine-forwarded” and 12
+          “recognized but not yet honored”. In the target compiler these are
+          <em>user-declared inputs</em> that get compiled into canonical tuples —
+          each acquiring a class, a coverage, a consumer mask, and a
+          content-addressed ID.
+        </p>
+        <p>
+          The realized API does not encode all seven canonical classes. Exactly
+          as the placement vocabulary does, it encodes a four-member
+          <strong>realized subset</strong> —
+          <code>IntentClass = Hard | Bounded | Soft | Unsupported</code> — and
+          <code>Constraint::intent_class()</code> is the mapping in code today.
+          The <code>Joint</code> class folds into <code>Hard</code> with a
+          group-preserving repair scope; <code>ExternalOnly</code> and
+          <code>ManualReview</code> are carried by the coverage/evidence side, not
+          by <code>IntentClass</code>. The table below gives both the realized
+          <code>IntentClass</code> (what the code returns) and the richer
+          canonical class (what the full model distinguishes).
+        </p>
+        <table>
+          <thead>
+            <tr><th><code>Constraint</code> variant</th><th>Realized <code>IntentClass</code></th><th>Canonical class</th><th>Primary consumers</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>Symmetric(a,b)</code></td><td>Hard</td><td>Hard / Joint</td><td>place, route</td></tr>
+            <tr><td><code>SelfSymmetric(a)</code></td><td>Hard</td><td>Hard</td><td>place</td></tr>
+            <tr><td><code>SymmetricGroup([(a,b)…])</code></td><td>Hard</td><td>Joint</td><td>place, route</td></tr>
+            <tr><td><code>Order(a,b,axis)</code></td><td>Hard</td><td>Hard</td><td>place</td></tr>
+            <tr><td><code>Align([…],axis)</code></td><td>Hard</td><td>Hard</td><td>place</td></tr>
+            <tr><td><code>GuardRing([…],ring)</code></td><td>Hard</td><td>Hard</td><td>place, route, analysis</td></tr>
+            <tr><td><code>Matching(a,b)</code></td><td>Bounded</td><td>Joint</td><td>place, route, analysis</td></tr>
+            <tr><td><code>DistanceConstraint(a,b,d)</code></td><td>Bounded</td><td>Bounded</td><td>place</td></tr>
+            <tr><td><code>NetShield(net)</code></td><td>Soft</td><td>Bounded</td><td>route, analysis</td></tr>
+            <tr><td><code>SetNetClass(net,class)</code></td><td>Soft</td><td>Hard</td><td>route</td></tr>
+            <tr><td><code>SignalFlow([…])</code></td><td>Unsupported</td><td>Soft / Hard</td><td>place, route</td></tr>
+            <tr><td><code>AspectRatio(w,h)</code></td><td>Unsupported</td><td>Bounded</td><td>place</td></tr>
+            <tr><td><code>CellBoundary(w,h)</code></td><td>Unsupported</td><td>Hard</td><td>place</td></tr>
+            <tr><td><code>FixPosition(a,x,y)</code></td><td>Unsupported</td><td>Hard</td><td>place</td></tr>
+            <tr><td><code>PlaceOnGrid(a,d)</code></td><td>Unsupported</td><td>Hard</td><td>place</td></tr>
+            <tr><td><code>PlaceOnBoundary(a,side)</code></td><td>Unsupported</td><td>Hard</td><td>place</td></tr>
+            <tr><td><code>Group([…],g)</code></td><td>Unsupported</td><td>Joint</td><td>place</td></tr>
+            <tr><td><code>PortLocation(a,net,pos)</code></td><td>Unsupported</td><td>Bounded</td><td>place, route</td></tr>
+            <tr><td><code>NetMatch(a,b,d)</code></td><td>Unsupported</td><td>Bounded</td><td>route, analysis</td></tr>
+            <tr><td><code>MultiWire(net,n)</code></td><td>Unsupported</td><td>Bounded</td><td>route</td></tr>
+            <tr><td><code>DoNotRoute(net)</code></td><td>Unsupported</td><td>Hard</td><td>route</td></tr>
+            <tr><td><code>ChargeFlow(net)</code></td><td>Unsupported</td><td>Soft</td><td>route</td></tr>
+          </tbody>
+        </table>
+        <p>
+          The <code>Unsupported</code> rows are exactly the twelve variants for
+          which <code>is_engine_supported()</code> is <code>false</code> — the set
+          the builder surfaces as a <code>BuildWarning::UnsupportedConstraint</code>.
+          The “Canonical class” column shows where each will land once the full
+          compiler subsumes the realized subset (e.g. <code>Matching</code> and
+          <code>SymmetricGroup</code> become true <code>Joint</code> obligations
+          with group-preserving repair, rather than <code>Bounded</code>/<code>Hard</code>
+          approximations).
+        </p>
+        <div class="note">
+          <strong>The honesty bridge.</strong> The API's
+          <code>BuildWarning::UnsupportedConstraint</code> (emitted in
+          <code>crates/api/src/builder.rs</code> for the 12 not-yet-honored
+          variants) is the API-level form of the compiler's <em>inexpressibility
+          contract</em>: a consumer that cannot express an obligation must emit a
+          linked skip, never drop it. When the full compiler lands, those warnings
+          become certificate-visible <code>ProjectedConstraintSkip</code> entries
+          keyed to a canonical ID — see
+          <a href="projections-certificate.html#inv1">Projection soundness</a>.
+          This is the same discipline the realized <code>PlacementCertificate</code>
+          already follows: it emits a <em>degraded</em> certificate (every gate
+          <code>Degraded</code>) rather than claiming a signoff it has not proven.
+        </div>
+
+        <p>
+          <strong>Continue:</strong>
+          <a href="technology-coverage.html">PDK Technology &amp; Coverage →</a>
+        </p>
+      </main>
+    </div>
+
+    <footer class="site-footer">Philis &middot; Analog Layout Engine</footer>
+      <script src="../../nav.js"></script>
+  </body>
+</html>

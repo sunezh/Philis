@@ -1,0 +1,1091 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Technology Compiler — Philis</title>
+    <link rel="stylesheet" href="../../style.css" />
+    <link rel="icon" type="image/svg+xml" href="../../brand.svg" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../../index.html">
+        <img src="../../brand.svg" alt="Philis" />
+        Philis
+      </a>
+      <nav class="top-nav">
+        <a href="../../index.html">Home</a>
+        <a href="../../Usage/getting-started.html">Usage</a>
+        <a href="../api/index.html" class="active">Developer</a>
+        <a href="https://github.com/OmarSiwy/Philis">GitHub</a>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <h4>Developer</h4>
+        <ul>
+          <li><a href="../api/index.html">API</a></li>
+          <li><a href="../geom/index.html">Geometry</a></li>
+          <li>
+            <a href="../tech/index.html" class="active">Technology</a>
+          </li>
+          <li><a href="../verify/index.html">Verify</a></li>
+          <li><a href="../solver/index.html">Solver</a></li>
+          <li><a href="../place/index.html">Place</a></li>
+          <li><a href="../route/index.html">Route</a></li>
+          <li><a href="../constraints/index.html">Constraints</a></li>
+        </ul>
+        <h4>Technology</h4>
+        <ul>
+          <li><a href="index.html" class="active">Overview</a></li>
+        </ul>
+        <h4>Usage</h4>
+        <ul>
+          <li>
+            <a href="../../Usage/getting-started.html">Getting Started</a>
+          </li>
+          <li><a href="../../Usage/installation.html">Installation</a></li>
+        </ul>
+      </aside>
+
+      <main class="content">
+        <p class="breadcrumb">
+          <a href="../../index.html">Home</a> / Developer / Tech
+        </p>
+
+        <h1>The Philis Technology Compiler</h1>
+        <p>
+          <strong>Status:</strong> design reference. This section specifies the
+          <code>philis-tech</code> crate (<code>crates/tech</code>), the shared
+          PDK technology compiler that all three engine crates depend on. The
+          crate is scaffolded with its
+          <a href="https://github.com/OmarSiwy/Philis/blob/main/crates/tech/Cargo.toml"
+            >Cargo.toml</a
+          >
+          and stub <code>lib.rs</code> in place. Nothing beyond the scaffold is
+          implemented yet — see <a href="#status">Implementation status</a>.
+        </p>
+
+        <blockquote>
+          <p>
+            <strong>The one-sentence thesis.</strong> A place-and-route engine
+            that cannot answer "what are the spacing rules on metal 2?" without
+            importing a proprietary deck is not portable. A shared, compiled
+            technology model with honest coverage classification makes the
+            engine PDK-agnostic and the certificate auditable.
+          </p>
+        </blockquote>
+
+        <h2 id="why-shared">Why the technology model is shared</h2>
+        <p>
+          All three engine crates need compiled PDK data, and each was
+          planning to build its own:
+        </p>
+        <ul>
+          <li>
+            <strong>Constraints</strong> had a <code>technology/</code> module
+            with a <code>CompiledTechnology</code> trait + SKY130 concrete,
+            coverage inventory, and MCMM-keyed rule predicates.
+          </li>
+          <li>
+            <strong>Place</strong> had a <code>pdk/</code> module with a PDK
+            compiler, <code>LayerInfo</code>, spacing/width/enclosure rules,
+            well rules, orientations, row pitch, and a coverage report.
+          </li>
+          <li>
+            <strong>Route</strong> had a <code>tech/</code> module with the
+            full seven-tuple technology model
+            <code>T = (L, G, V, R, E, X, M)</code>, a two-stage compiler
+            pipeline, and the Philis-native PDK schema.
+          </li>
+        </ul>
+        <p>
+          Three independent technology models mean three independent sets of
+          layer definitions, three sets of spacing rules, three coverage
+          inventories. When the PDK changes, three modules must be updated.
+          When a rule predicate has a bug, three consumers have different
+          answers to the same question. When the certificate records a
+          <code>pdk_oracle_hash</code>, which of the three hashes does it use?
+        </p>
+        <p>
+          The <code>philis-tech</code> crate eliminates this by extracting
+          the shared technology model into a single crate that all three
+          consumers depend on. Each consumer gets a <code>&amp;CompiledTech</code>
+          reference to the same immutable, compiled structure. The hash is
+          computed once and used everywhere.
+        </p>
+
+        <h2 id="pipeline">The two-stage pipeline</h2>
+        <p>
+          The technology compiler uses a two-stage pipeline that separates
+          format-specific import from format-agnostic compilation:
+        </p>
+        <pre><code>  External PDK files              Philis-native schema          CompiledTech
+  (LEF, Sky130 files,     ---->   (JSON file on disk      ---->  (in-memory,
+   hand-authored JSON)             or in-memory)                  immutable)
+
+        IMPORT                          COMPILE
+    (format-specific)              (format-agnostic)</code></pre>
+
+        <h3>Stage 1: Import</h3>
+        <p>
+          A format-specific importer reads external PDK files and produces a
+          Philis-native JSON schema. The importer is responsible for mapping
+          external layer names, rule formats, and parameter conventions into
+          the Philis schema vocabulary. The user can inspect and edit the
+          resulting JSON before compilation.
+        </p>
+        <p>
+          Three importers are planned:
+        </p>
+        <table>
+          <thead>
+            <tr><th>Importer</th><th>Input</th><th>Coverage</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>LEF</strong> (generic)</td>
+              <td>Technology LEF file</td>
+              <td>Layer/via/site definitions. No parasitics, antenna, or density.</td>
+            </tr>
+            <tr>
+              <td><strong>SKY130</strong> (targeted)</td>
+              <td>Hardcoded data from the open-source SKY130 PDK</td>
+              <td>Layers, vias, spacing/width/enclosure, extraction parameters. The most complete importer.</td>
+            </tr>
+            <tr>
+              <td><strong>JSON</strong> (passthrough)</td>
+              <td>Hand-authored JSON schema</td>
+              <td>Whatever the user provides. Coverage annotations are explicit.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>Stage 2: Compile</h3>
+        <p>
+          The compiler reads the Philis schema and builds an immutable
+          <code>CompiledTech</code> structure. It validates structural
+          invariants, classifies rule coverage, derives the
+          <code>PdkState</code>, and computes the BLAKE3 PDK hash.
+        </p>
+        <p>
+          The compiler never sees the original external files. This means:
+        </p>
+        <ul>
+          <li>New PDK formats are supported by writing a new importer, not
+              touching the compiler.</li>
+          <li>Users can hand-write or hand-edit the schema for unsupported
+              PDKs.</li>
+          <li>The schema is version-controlled and diffable.</li>
+          <li>The compiler can be tested independently of any external PDK
+              format.</li>
+        </ul>
+
+        <div class="note">
+          <strong>Why two stages instead of one?</strong> A single-stage
+          pipeline that reads LEF directly into a compiled structure couples
+          the compiler to the LEF format. When a second format appears (Sky130
+          file tree, IHP SG13G2, commercial TechFile), the compiler must grow
+          a second parser. The two-stage design means the compiler has exactly
+          one input format (the Philis schema), and format diversity is handled
+          entirely in the import stage.
+        </div>
+
+        <h2 id="compiled-tech">The CompiledTech data model</h2>
+        <p>
+          <code>CompiledTech</code> is the immutable, compiled oracle that
+          every downstream crate queries. It is <code>Send + Sync</code> — safe
+          to share across threads via <code>&amp;CompiledTech</code>. It is
+          constructed once and never mutated.
+        </p>
+
+        <pre><code>pub struct CompiledTech {
+    name: String,
+    db_unit_nm: i64,
+    manufacturing_grid_nm: i64,
+    layers: LayerStack,
+    vias: ViaTable,
+    grids: GridTable,
+    rules: RuleSet,
+    extract: ExtractModel,
+    coverage_report: RuleCoverageReport,
+    pdk_state: PdkState,
+    pdk_hash: [u8; 32],   // BLAKE3
+}</code></pre>
+
+        <p>
+          Each sub-structure owns a specific domain of the compiled technology.
+          Consumers access them through typed accessors on
+          <code>CompiledTech</code>:
+        </p>
+
+        <table>
+          <thead>
+            <tr><th>Sub-structure</th><th>What it owns</th><th>Primary consumers</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>LayerStack</code></td>
+              <td>Ordered layer definitions (bottom to top), name-to-id lookup, layer class and direction</td>
+              <td>All three: constraints (rule references), place (layer roles), route (stack traversal)</td>
+            </tr>
+            <tr>
+              <td><code>ViaTable</code></td>
+              <td>Via definitions indexed by layer pair, cut size, enclosure, resistance</td>
+              <td>Route (via selection, via arrays), place (via enclosure for DRC)</td>
+            </tr>
+            <tr>
+              <td><code>GridTable</code></td>
+              <td>Per-layer track positions (pitch + offset), preferred direction, width bounds</td>
+              <td>Route (track assignment), place (row pitch, site width)</td>
+            </tr>
+            <tr>
+              <td><code>RuleSet</code></td>
+              <td>All DRC predicates with typed dispatch methods</td>
+              <td>All three: constraints (rule IDs for coverage), place (DRC oracle), route (geometry legality)</td>
+            </tr>
+            <tr>
+              <td><code>ExtractModel</code></td>
+              <td>Per-corner extraction parameters: sheet R, area/fringe cap, coupling cap, via R</td>
+              <td>Route (in-loop PEX surrogate), constraints (parasitic budget checking)</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h2 id="layers">Layer stacks and via definitions</h2>
+
+        <h3>LayerStack</h3>
+        <p>
+          The layer stack is an ordered sequence of layer definitions, sorted
+          from bottom (substrate) to top (passivation). Each layer carries:
+        </p>
+        <ul>
+          <li>A stable <code>LayerId</code> (an index into the vector) for
+              O(1) random access.</li>
+          <li>A GDS layer/datatype pair for physical layout correspondence.</li>
+          <li>A <code>LayerClass</code> that classifies its functional role.</li>
+          <li>A <code>LayerDirection</code> (Horizontal, Vertical, or Any)
+              for routing layers.</li>
+          <li>Dimensional constraints: minimum width, maximum width (if any),
+              thickness.</li>
+        </ul>
+
+        <pre><code>pub enum LayerClass {
+    Diffusion,
+    Poly,
+    LocalInterconnect,
+    Metal(u8),       // Metal(1) = M1, Metal(2) = M2, ...
+    Via(u8),         // Via(1) = V1 (M1-M2), Via(2) = V2 (M2-M3), ...
+    Well,            // nwell, pwell, dnwell
+    Implant,         // nsdm, psdm, hvtp, lvtn
+    Marker,
+    Keepout,
+    Pad,
+    Passivation,
+}
+
+pub enum LayerDirection {
+    Horizontal,
+    Vertical,
+    Any,
+}</code></pre>
+
+        <p>
+          The <code>LayerStack</code> provides name-to-id lookup via a
+          <code>BTreeMap</code> (deterministic iteration order, important for
+          hashing) and filtered iterators for routing layers, metals, and
+          vias.
+        </p>
+
+        <h3>ViaTable</h3>
+        <p>
+          The via table indexes all legal via transitions by
+          <code>(bottom_layer, top_layer)</code>. Multiple via definitions per
+          layer pair are supported — different cut sizes, enclosures, or array
+          rules for the same layer transition. Each <code>ViaDef</code>
+          carries:
+        </p>
+        <ul>
+          <li>A stable <code>ViaId</code> for fast reference.</li>
+          <li>Bottom and top <code>LayerId</code>s.</li>
+          <li>Cut size (width, height in nm).</li>
+          <li>Cut spacing for via arrays.</li>
+          <li>Asymmetric enclosure requirements for bottom and top layers
+              (<code>[x_enc, y_enc]</code>).</li>
+          <li>Via resistance (ohms per cut).</li>
+        </ul>
+
+        <h3>GridTable</h3>
+        <p>
+          The grid table provides per-layer track positions for routing. Each
+          routing layer has a <code>GridDef</code> with pitch, offset,
+          direction, and width bounds. The grid table supports:
+        </p>
+        <ul>
+          <li><code>track_center(layer, index)</code> — compute the center
+              coordinate of track <code>index</code> on the given layer.</li>
+          <li><code>snap_to_track(layer, coord)</code> — snap an arbitrary
+              coordinate to the nearest legal track.</li>
+          <li><code>tracks_in_range(layer, lo, hi)</code> — enumerate all
+              track positions within a coordinate range.</li>
+        </ul>
+
+        <h2 id="rules">DRC rule predicates</h2>
+        <p>
+          The <code>RuleSet</code> stores all DRC predicates and provides
+          typed dispatch methods that return the strictest applicable value
+          for a given query. This is the primary interface consumers use for
+          geometry legality checks.
+        </p>
+
+        <h3>Dispatch methods</h3>
+        <pre><code>impl RuleSet {
+    /// Strictest applicable spacing for the layer, considering
+    /// both shapes' widths. Handles base, width-dependent, and
+    /// same-net spacing rules.
+    pub fn min_spacing(&amp;self, layer: LayerId, width_a: i64, width_b: i64) -&gt; i64;
+
+    /// Minimum legal width for the layer.
+    pub fn min_width(&amp;self, layer: LayerId) -&gt; i64;
+
+    /// Enclosure of a via on the given layer: [x_enc, y_enc].
+    pub fn via_enclosure(&amp;self, via: ViaId, layer: LayerId) -&gt; [i64; 2];
+
+    /// Minimum area for the layer, if constrained.
+    pub fn min_area(&amp;self, layer: LayerId) -&gt; Option&lt;i64&gt;;
+
+    /// End-of-line spacing for the layer and given EOL width.
+    pub fn eol_spacing(&amp;self, layer: LayerId, width: i64) -&gt; Option&lt;i64&gt;;
+
+    /// Spacing considering parallel run length.
+    pub fn prl_spacing(&amp;self, layer: LayerId, width: i64, prl: i64) -&gt; i64;
+}</code></pre>
+
+        <h3>Width-dependent spacing</h3>
+        <p>
+          Many PDKs define spacing rules that depend on the width of the
+          adjacent shapes. A typical rule reads: "if either shape is wider
+          than 3000 nm, spacing must be at least 280 nm (instead of the base
+          140 nm)." The dispatch method finds the rule whose
+          <code>width_threshold_nm</code> is the largest value less than or
+          equal to <code>max(width_a, width_b)</code>. If no width-dependent
+          rule matches, the base (unconditional) spacing is returned.
+        </p>
+
+        <h3>Per-predicate coverage</h3>
+        <p>
+          Every rule in the <code>RuleSet</code> carries a
+          <code>Coverage</code> classification. This tells consumers —
+          and ultimately the certificate — whether the rule was fully coded,
+          partially coded, approximate, external-only, or missing. The
+          constraints crate uses this to build its coverage inventory; the
+          place and route crates use it to annotate their certificates.
+        </p>
+
+        <h2 id="extraction">Extraction parameters</h2>
+        <p>
+          The <code>ExtractModel</code> provides per-corner parasitic
+          extraction parameters for in-loop PEX surrogates and parasitic
+          budget checking. All parameters are keyed by PVT corner (e.g.,
+          "tt", "ss", "ff"), with a designated default corner for in-loop
+          estimates.
+        </p>
+
+        <table>
+          <thead>
+            <tr><th>Parameter</th><th>Unit</th><th>What it models</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Sheet resistance</td>
+              <td>ohm/sq</td>
+              <td>Wire resistance per layer. Dominates IR drop and RC delay.</td>
+            </tr>
+            <tr>
+              <td>Area capacitance</td>
+              <td>fF/um<sup>2</sup></td>
+              <td>Parallel-plate capacitance between a wire and the substrate/adjacent layer.</td>
+            </tr>
+            <tr>
+              <td>Fringe capacitance</td>
+              <td>fF/um</td>
+              <td>Edge-field capacitance per unit wire length. Dominates for narrow wires.</td>
+            </tr>
+            <tr>
+              <td>Coupling capacitance</td>
+              <td>fF/um</td>
+              <td>Capacitive coupling between adjacent wires on the same or neighboring layers. The coupling window (nm) defines the interaction range.</td>
+            </tr>
+            <tr>
+              <td>Via resistance</td>
+              <td>ohm/cut</td>
+              <td>Resistance per via cut. Multiple cuts reduce the effective resistance proportionally.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          The route crate's in-loop PEX surrogate uses the default corner for
+          fast wire-resistance and capacitance estimates during search. The
+          constraints crate uses the extraction model to check parasitic
+          budgets against bounded obligations. Full multi-corner analysis is
+          a signoff feature — the in-loop surrogate uses a single corner for
+          speed.
+        </p>
+
+        <div class="note">
+          <strong>Accuracy vs. speed.</strong> The extraction model in
+          <code>philis-tech</code> provides first-order parasitic estimates
+          suitable for in-loop decision-making. It is not a replacement for a
+          calibrated field solver (Calibre xRC, StarRC). The honest coverage
+          model classifies extraction accuracy: <code>Coded</code> for
+          parameters directly from the PDK, <code>Approximate</code> for
+          parameters with known accuracy limitations. The certificate records
+          which extraction corner was used and at what confidence level.
+        </div>
+
+        <h2 id="coverage">Coverage classification and PdkState</h2>
+        <p>
+          Every rule predicate in the compiled technology carries a
+          <code>Coverage</code> classification — a nine-variant enum that
+          tells the engine and the certificate exactly how much confidence
+          to place in that rule:
+        </p>
+
+        <table>
+          <thead>
+            <tr><th>Coverage</th><th>Meaning</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>Coded</code></td>
+              <td>Fully coded with an internal predicate. The engine can check and prove compliance.</td>
+            </tr>
+            <tr>
+              <td><code>Partial</code></td>
+              <td>Some conditions checked internally; others need external verification.</td>
+            </tr>
+            <tr>
+              <td><code>Approximate</code></td>
+              <td>Coded but with known accuracy limitations (e.g., EM models with approximate current estimates).</td>
+            </tr>
+            <tr>
+              <td><code>ExternalOnly</code></td>
+              <td>Can only be checked by an external signoff deck. The engine records the obligation but cannot prove it.</td>
+            </tr>
+            <tr>
+              <td><code>ManualReview</code></td>
+              <td>Requires human review. No machine-checkable predicate exists.</td>
+            </tr>
+            <tr>
+              <td><code>Missing</code></td>
+              <td>Known to exist for this node but not modeled at all.</td>
+            </tr>
+            <tr>
+              <td><code>NotApplicable</code></td>
+              <td>Not applicable to this node (e.g., multipatterning on a mature single-patterning process).</td>
+            </tr>
+            <tr>
+              <td><code>Contradictory</code></td>
+              <td>Two or more sources provide conflicting data for this rule.</td>
+            </tr>
+            <tr>
+              <td><code>Unsupported</code></td>
+              <td>Rule class is known but no predicate exists in the engine.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          The coverage values form a lattice ordered from best
+          (<code>Coded</code>) to worst (<code>Contradictory</code>,
+          <code>Unsupported</code>). The lattice meet operation returns the
+          worse of two values, which means merging coverage across multiple
+          rules is conservative: a set of rules is only <code>Coded</code> if
+          every member is <code>Coded</code>.
+        </p>
+
+        <h3>PdkState derivation</h3>
+        <p>
+          After classifying all predicates, the compiler derives the overall
+          <code>PdkState</code> — a four-variant enum that summarizes the
+          PDK's readiness for the engine:
+        </p>
+
+        <table>
+          <thead>
+            <tr><th>PdkState</th><th>Condition</th><th>What it means</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>FullSignoff</code></td>
+              <td>All required rules are <code>Coded</code>.</td>
+              <td>Full signoff confidence. The engine can prove every required rule.</td>
+            </tr>
+            <tr>
+              <td><code>AbstractComplete</code></td>
+              <td>Most required rules are at least <code>Partial</code>.</td>
+              <td>Abstract placement and routing are possible with known gaps.</td>
+            </tr>
+            <tr>
+              <td><code>SparseResearch</code></td>
+              <td>Some required rules are present but coverage is sparse.</td>
+              <td>Research and prototyping only. Not for tapeout.</td>
+            </tr>
+            <tr>
+              <td><code>ContradictoryOrMissing</code></td>
+              <td>At least one required rule is <code>Missing</code> or <code>Contradictory</code>.</td>
+              <td>The compiled technology may produce incorrect results. Proceed with extreme caution.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          "Required" rules are the minimum set without which the engine cannot
+          produce legal geometry: basic spacing and width for each routing
+          layer, via enclosure for each via in the stack, and connectivity
+          extraction parameters (sheet resistance) for each routing layer.
+        </p>
+
+        <h3>The RuleCoverageReport</h3>
+        <p>
+          The <code>RuleCoverageReport</code> counts predicates per coverage
+          bucket. It travels with every certificate so the consumer knows
+          exactly what was proven and what was not:
+        </p>
+
+        <pre><code>pub struct RuleCoverageReport {
+    pub coded: u32,
+    pub partial: u32,
+    pub approximate: u32,
+    pub external_only: u32,
+    pub manual_review: u32,
+    pub missing: u32,
+    pub not_applicable: u32,
+    pub contradictory: u32,
+    pub unsupported: u32,
+    pub total: u32,
+}</code></pre>
+
+        <div class="note warn">
+          <strong>Missing is not "no rule."</strong> A <code>Missing</code>
+          classification means the rule is <em>known to exist</em> for this
+          process node but is not modeled in the compiled technology. This is
+          fundamentally different from "the rule does not exist." A layout that
+          passes all <code>Coded</code> checks but has <code>Missing</code>
+          rules is not DRC-clean — it has unchecked rules. The certificate
+          records this distinction, and the <code>PdkState</code> degrades
+          accordingly.
+        </div>
+
+        <h2 id="schema">The Philis-native PDK schema</h2>
+        <p>
+          The Philis PDK schema is a JSON document that captures the
+          routing-relevant subset of a PDK. It is the interchange format
+          between importers and the compiler, and is designed to be:
+        </p>
+        <ul>
+          <li><strong>Human-readable.</strong> A layout engineer can open the
+              JSON in a text editor, understand what rules are encoded, and
+              verify them against the PDK documentation.</li>
+          <li><strong>Hand-editable.</strong> For PDKs without an automated
+              importer, users can author the schema manually. Coverage
+              annotations let the user honestly declare what they know.</li>
+          <li><strong>Diffable.</strong> Schema changes between PDK revisions
+              produce clean diffs.</li>
+          <li><strong>Version-controlled.</strong> The schema has a
+              <code>schema_version</code> field. The compiler rejects schemas
+              with incompatible major versions.</li>
+        </ul>
+
+        <p>
+          A minimal schema for a two-metal process looks like this:
+        </p>
+
+        <pre><code>{
+  "schema_version": "1.0",
+  "name": "example_2metal",
+  "node_family": "demo",
+  "db_unit_nm": 1,
+  "manufacturing_grid_nm": 5,
+
+  "layers": [
+    {
+      "name": "met1", "gds_layer": 68, "gds_datatype": 20,
+      "class": "metal", "class_index": 1,
+      "direction": "horizontal",
+      "pitch_nm": 340, "offset_nm": 170,
+      "min_width_nm": 140
+    },
+    {
+      "name": "met2", "gds_layer": 69, "gds_datatype": 20,
+      "class": "metal", "class_index": 2,
+      "direction": "vertical",
+      "pitch_nm": 340, "offset_nm": 170,
+      "min_width_nm": 140
+    }
+  ],
+
+  "vias": [
+    {
+      "name": "via1", "bottom": "met1", "top": "met2",
+      "cut_size_nm": [150, 150], "cut_spacing_nm": [170, 170],
+      "enclosure_bottom_nm": [55, 85],
+      "enclosure_top_nm": [55, 85],
+      "resistance_ohm": 4.5, "coverage": "coded"
+    }
+  ],
+
+  "spacing_rules": [
+    { "name": "m1.S.1", "layer": "met1",
+      "min_spacing_nm": 140, "coverage": "coded" },
+    { "name": "m2.S.1", "layer": "met2",
+      "min_spacing_nm": 140, "coverage": "coded" }
+  ],
+
+  "width_rules": [
+    { "name": "m1.W.1", "layer": "met1",
+      "min_width_nm": 140, "coverage": "coded" },
+    { "name": "m2.W.1", "layer": "met2",
+      "min_width_nm": 140, "coverage": "coded" }
+  ]
+}</code></pre>
+
+        <p>
+          The full schema specification — including extraction parameters,
+          enclosure rules, area rules, EOL rules, EM rules, and antenna
+          rules — is documented in the
+          <a href="https://github.com/OmarSiwy/Philis/blob/main/crates/tech/PLAN.md"
+            >implementation plan</a
+          >.
+        </p>
+
+        <h2 id="hot-switch">Hot-switchability</h2>
+        <p>
+          The technology compiler is designed for hot-switchable PDK backends.
+          New PDK = new importer. Consumers never change.
+        </p>
+        <p>
+          The contract between the tech crate and its consumers is the
+          <code>CompiledTech</code> structure and its typed accessors. A
+          consumer that calls <code>tech.rules().min_spacing(layer, w1, w2)</code>
+          does not know or care whether the underlying data came from a LEF
+          file, a hardcoded SKY130 importer, or a hand-authored JSON schema.
+          The same query works the same way regardless of the PDK backend.
+        </p>
+
+        <p>
+          The planned PDK progression:
+        </p>
+        <table>
+          <thead>
+            <tr><th>PDK</th><th>Node</th><th>Importer</th><th>Status</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>SKY130</td>
+              <td>130nm planar CMOS</td>
+              <td>Hardcoded data + targeted importer</td>
+              <td>First target. Hardcoded data in progress.</td>
+            </tr>
+            <tr>
+              <td>IHP SG13G2</td>
+              <td>130nm SiGe BiCMOS</td>
+              <td>Targeted importer (similar structure to SKY130)</td>
+              <td>Second target. Validates PDK-agnosticism.</td>
+            </tr>
+            <tr>
+              <td>Generic LEF</td>
+              <td>Any node with a Technology LEF</td>
+              <td>Generic LEF parser</td>
+              <td>Third target. Covers commercial PDKs (with gaps).</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>
+          When the IHP SG13G2 importer is written, the <code>LayerClass</code>
+          enum may need extension (e.g., for bipolar devices), but the
+          <code>CompiledTech</code> structure, the <code>RuleSet</code> dispatch
+          methods, and the <code>ExtractModel</code> accessors remain unchanged.
+          This is the proof that the abstraction is correct: a different process
+          node produces a different <code>CompiledTech</code> with different
+          data, but the same interface.
+        </p>
+
+        <div class="note">
+          <strong>The importer is not the compiler.</strong> Adding a new PDK
+          means writing a new importer (a few hundred lines that map the PDK's
+          file structure into the Philis schema). It does not mean touching the
+          compiler, the schema spec, the validation logic, or any consumer
+          crate. The two-stage pipeline makes this possible: the compiler's
+          only input is the schema, and the schema is the same regardless of
+          which importer produced it.
+        </div>
+
+        <h2 id="hashing">PDK hashing for certificates</h2>
+        <p>
+          The compiled technology is hashable. The BLAKE3 hash covers all data
+          that affects the compiled structure: layer definitions, via
+          definitions, all DRC rules, extraction parameters, coverage
+          classifications, and the derived <code>PdkState</code>. The hash is
+          computed once at construction time and stored in
+          <code>CompiledTech.pdk_hash</code>.
+        </p>
+        <p>
+          This hash participates in the constraint certificate
+          (<code>ConstraintCertificate.pdk_oracle_hash</code>) and the route
+          certificate (<code>RouteCertificate.pdk_oracle_hash</code>). Any
+          change to the compiled technology produces a different hash,
+          invalidating all cached results. A third party can re-import the
+          same PDK data, recompile, and verify that the hash matches — which
+          is the precondition for certificate replay.
+        </p>
+
+        <h3>Stability invariant</h3>
+        <p>
+          Same input data must produce the same hash across Rust compiler
+          versions, platforms, and runs. This requires:
+        </p>
+        <ul>
+          <li>Deterministic iteration order (<code>BTreeMap</code>, not
+              <code>HashMap</code>, or sorted <code>Vec</code>).</li>
+          <li>Canonical byte encoding (little-endian for integers, UTF-8 for
+              strings).</li>
+          <li>Floating-point values hashed as their
+              <code>to_le_bytes()</code> representation (bit-exact, not
+              value-exact).</li>
+        </ul>
+
+        <h2 id="consumers">What each consumer needs</h2>
+        <p>
+          The three consumer crates depend on <code>philis-tech</code> for
+          different subsets of the compiled technology:
+        </p>
+
+        <table>
+          <thead>
+            <tr><th>Consumer</th><th>Sub-structures used</th><th>Key queries</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><a href="../constraints/index.html">Constraints</a></td>
+              <td>Full <code>CompiledTech</code>, <code>Coverage</code>, <code>PdkState</code>, <code>RuleCoverageReport</code></td>
+              <td>Coverage inventory for the <code>ConstraintCertificate</code>, rule IDs for the <code>IntentGraph</code>, <code>pdk_hash()</code> for certificate binding</td>
+            </tr>
+            <tr>
+              <td><a href="../place/index.html">Place</a></td>
+              <td><code>LayerStack</code>, <code>GridTable</code>, <code>RuleSet</code></td>
+              <td><code>min_spacing()</code>, <code>min_width()</code>, <code>via_enclosure()</code> for the DRC oracle; grid pitch and offset for row/site computation; <code>pdk_hash()</code></td>
+            </tr>
+            <tr>
+              <td><a href="../route/index.html">Route</a></td>
+              <td><code>LayerStack</code>, <code>ViaTable</code>, <code>GridTable</code>, <code>RuleSet</code>, <code>ExtractModel</code></td>
+              <td>All dispatch methods for geometry legality; <code>ExtractModel</code> for in-loop PEX surrogate (wire R, cap, coupling, via R); <code>pdk_hash()</code></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="note warn">
+          <strong>No consumer modifies the technology.</strong> Consumers
+          receive <code>&amp;CompiledTech</code>. There is no mutable access,
+          no interior mutability, and no way for a consumer to inject data
+          back into the compiled technology. If the PDK changes, the entire
+          <code>CompiledTech</code> is rebuilt from scratch and every
+          downstream result is invalidated. This is the "whole certificate
+          invalidation" property: a PDK change invalidates everything, and the
+          hash proves it.
+        </div>
+
+        <h2 id="sky130">The SKY130 concrete implementation</h2>
+        <p>
+          SKY130 is the first concrete PDK target. It is an open-source 130nm
+          planar CMOS process from SkyWater Technology, widely used in
+          academic and open-source IC design. The open PDK provides enough
+          data for a useful (though incomplete) <code>CompiledTech</code>.
+        </p>
+
+        <h3>Layer stack</h3>
+        <p>
+          SKY130 provides one local interconnect layer (li1), five metal
+          layers (met1 through met5), and a full set of vias connecting them.
+          The lower metals (met1, met2) have fine pitch (340 nm) suitable for
+          signal routing; the upper metals (met3, met4) have coarser pitch
+          (680 nm) for power and buses; met5 is a thick top metal for power
+          distribution.
+        </p>
+
+        <h3>Coverage for SKY130 V1</h3>
+        <table>
+          <thead>
+            <tr><th>Rule class</th><th>Coverage</th><th>Rationale</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Min width, min spacing (all routing)</td><td><code>Coded</code></td><td>Directly from DRC deck</td></tr>
+            <tr><td>Wide-metal spacing</td><td><code>Coded</code></td><td>Width-dependent rules encoded</td></tr>
+            <tr><td>Via enclosure</td><td><code>Coded</code></td><td>Per-via enclosure from DRC deck</td></tr>
+            <tr><td>Min area</td><td><code>Coded</code></td><td>Per-layer from DRC deck</td></tr>
+            <tr><td>PRL / EOL spacing</td><td><code>Partial</code></td><td>Some layers only</td></tr>
+            <tr><td>Antenna</td><td><code>ExternalOnly</code></td><td>Complex area-ratio; needs external check</td></tr>
+            <tr><td>Density / fill</td><td><code>ExternalOnly</code></td><td>Fill generation is external</td></tr>
+            <tr><td>EM / IR drop</td><td><code>Approximate</code></td><td>Resistivity present, current models approximate</td></tr>
+            <tr><td>LDE (LOD, WPE)</td><td><code>Approximate</code></td><td>Models exist, accuracy varies</td></tr>
+            <tr><td>Multipatterning</td><td><code>NotApplicable</code></td><td>Mature single-patterning node</td></tr>
+            <tr><td>CMP / lithography</td><td><code>Missing</code></td><td>Open PDK does not provide</td></tr>
+            <tr><td>ESD</td><td><code>ManualReview</code></td><td>Guidelines, not machine-checkable predicates</td></tr>
+            <tr><td>Guard ring / latch-up</td><td><code>Partial</code></td><td>Tap/guard rules coded, spacing conservative</td></tr>
+          </tbody>
+        </table>
+
+        <p>
+          <strong>PdkState for SKY130 V1:</strong>
+          <code>SparseResearch</code>. Enough for placement/routing
+          prototyping and engine development. Not for tapeout. The coverage
+          will widen as more rules are transcribed from the DRC deck.
+        </p>
+
+        <h2 id="alternatives">Alternatives considered</h2>
+
+        <details>
+          <summary>Why not parse the DRC deck directly instead of a two-stage pipeline?</summary>
+          <div class="details-body">
+            <p>
+              Foundry DRC decks (Calibre SVRF, Mentor Calibre DRC, KLayout
+              <code>.lydrc</code>) are procedural programs, not declarative rule
+              sets. A Calibre DRC file for a modern node can exceed 100,000
+              lines of SVRF code with conditional logic, derived layers,
+              density-computed layers, and multi-step operations. Parsing
+              this into a structured rule set is a research project in its
+              own right — and the result would be coupled to a specific DRC
+              format.
+            </p>
+            <p>
+              The two-stage pipeline sidesteps this entirely. The importer
+              extracts what it can from whatever source is available (LEF,
+              PDK documentation, hand transcription). The compiler works with
+              the structured Philis schema. Rules that the importer cannot
+              extract are classified as <code>Missing</code> or
+              <code>ExternalOnly</code> — the coverage model makes the gap
+              explicit rather than pretending it does not exist.
+            </p>
+            <p>
+              This is the honest approach: a technology model that claims to
+              have every rule but silently drops the ones it could not parse
+              is more dangerous than one that says "I have 40 of 200 rules,
+              here is what is missing."
+            </p>
+          </div>
+        </details>
+
+        <details>
+          <summary>Why not use a trait object instead of a concrete CompiledTech?</summary>
+          <div class="details-body">
+            <p>
+              The constraints crate's original design used a
+              <code>CompiledTechnology</code> trait with a SKY130 concrete
+              implementation. This makes PDK-switching a matter of swapping
+              the trait implementor. But it introduces three costs:
+            </p>
+            <ol>
+              <li>
+                <strong>Virtual dispatch on every rule query.</strong> The
+                route crate calls <code>min_spacing()</code> millions of times
+                during search. A virtual call adds an indirect branch
+                prediction miss on every query. With a concrete struct, the
+                compiler inlines the lookup.
+              </li>
+              <li>
+                <strong>Heterogeneous data behind a uniform interface.</strong>
+                Different PDKs have different layer counts, different rule
+                structures, different extraction models. A trait forces every
+                implementor to present the same interface, which means either
+                the interface is too narrow (losing PDK-specific data) or too
+                wide (every implementor must provide methods it does not need).
+              </li>
+              <li>
+                <strong>The import/compile split already provides
+                PDK-agnosticism.</strong> The compiler produces the same
+                <code>CompiledTech</code> struct regardless of which importer
+                produced the schema. The struct is the PDK-portability
+                boundary. A trait adds a second portability boundary on top,
+                with no additional benefit.
+              </li>
+            </ol>
+            <p>
+              The chosen design uses a concrete <code>CompiledTech</code>
+              struct. PDK-switching happens at the import stage (different
+              importer -> different schema -> same struct). The compiled
+              structure is the same type regardless of the PDK, which means
+              consumers can be generic over PDK without trait objects or type
+              parameters.
+            </p>
+          </div>
+        </details>
+
+        <details>
+          <summary>Why not let each consumer maintain its own technology model?</summary>
+          <div class="details-body">
+            <p>
+              This is the status quo. Each consumer crate was building its own
+              technology model with its own layer definitions, spacing rules,
+              and coverage tracking. The problems are:
+            </p>
+            <ul>
+              <li>
+                <strong>Consistency.</strong> Three independent spacing rule
+                implementations mean three chances to transcribe the wrong
+                value. If the placer thinks M1 spacing is 140 nm and the router
+                thinks it is 130 nm, the placer produces geometry that the
+                router considers illegal. This bug is silent and extremely
+                difficult to find.
+              </li>
+              <li>
+                <strong>Maintenance.</strong> When the PDK changes or a bug is
+                found, three modules must be updated. With a shared crate, one
+                fix propagates to all consumers.
+              </li>
+              <li>
+                <strong>Certificate coherence.</strong> The constraint
+                certificate and route certificate each record a
+                <code>pdk_oracle_hash</code>. If the three consumers have
+                different technology data, the hashes are different, and the
+                certificates are not comparable.
+              </li>
+            </ul>
+            <p>
+              A single shared crate eliminates all three problems. The cost
+              is a new dependency in the workspace, but the crate has minimal
+              dependencies of its own (<code>philis-geom</code>,
+              <code>serde</code>, <code>blake3</code>) and adds no coupling
+              between consumers.
+            </p>
+          </div>
+        </details>
+
+        <details>
+          <summary>Why BLAKE3 instead of SHA-256 or a simpler hash?</summary>
+          <div class="details-body">
+            <p>
+              The PDK hash is computed once at compilation time and stored
+              for certificate binding. Speed is not the primary concern — the
+              technology data is small (a few KB). The choice of BLAKE3 is
+              based on:
+            </p>
+            <ul>
+              <li>
+                <strong>Determinism.</strong> BLAKE3 produces identical output
+                across platforms and compiler versions for identical input.
+                SHA-256 does too, but BLAKE3's Rust crate (<code>blake3</code>)
+                is well-maintained and widely used in the Rust ecosystem.
+              </li>
+              <li>
+                <strong>Collision resistance.</strong> 256-bit output provides
+                sufficient collision resistance for certificate binding. No
+                one is going to craft a collision to fake a PDK hash.
+              </li>
+              <li>
+                <strong>Ecosystem alignment.</strong> BLAKE3 is the hash used
+                by Cargo, rustup, and many other Rust tools. Using the same
+                hash avoids adding a separate crypto dependency.
+              </li>
+            </ul>
+            <p>
+              A simpler hash (FNV, CRC32) would not provide collision
+              resistance. SHA-256 would work but adds a separate dependency
+              when BLAKE3 is already in the ecosystem.
+            </p>
+          </div>
+        </details>
+
+        <h2 id="status">Implementation status</h2>
+        <p>
+          This is a design reference and contract. The crate is scaffolded but
+          not yet implemented:
+        </p>
+        <table>
+          <thead>
+            <tr><th>Surface</th><th>Today</th><th>Target</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Crate scaffold</td>
+              <td><code>Cargo.toml</code> + stub <code>lib.rs</code></td>
+              <td>Full module tree per the module map</td>
+            </tr>
+            <tr>
+              <td>CompiledTech</td>
+              <td>Not implemented</td>
+              <td>Immutable struct with all sub-structures and typed accessors</td>
+            </tr>
+            <tr>
+              <td>LayerStack / ViaTable / GridTable</td>
+              <td>Not implemented</td>
+              <td>Full data structures with random-access and lookup methods</td>
+            </tr>
+            <tr>
+              <td>RuleSet dispatch</td>
+              <td>Not implemented</td>
+              <td>Six dispatch methods (min_spacing, min_width, via_enclosure, min_area, eol_spacing, prl_spacing)</td>
+            </tr>
+            <tr>
+              <td>ExtractModel</td>
+              <td>Not implemented</td>
+              <td>Per-corner extraction parameter lookups</td>
+            </tr>
+            <tr>
+              <td>Coverage / PdkState</td>
+              <td>Not implemented (similar types exist in <code>crates/api/src/core.rs</code>)</td>
+              <td>Nine-variant <code>Coverage</code> enum, four-variant <code>PdkState</code>, lattice operations, derivation algorithm</td>
+            </tr>
+            <tr>
+              <td>PDK schema</td>
+              <td>Not implemented</td>
+              <td>JSON schema with serde types, versioning, validation</td>
+            </tr>
+            <tr>
+              <td>SKY130 importer</td>
+              <td>Not implemented (hardcoded data exists in place and constraints plans)</td>
+              <td>Hardcoded SKY130 data producing a complete Philis schema</td>
+            </tr>
+            <tr>
+              <td>LEF importer</td>
+              <td>Not implemented</td>
+              <td>Generic Technology LEF parser producing Philis schema</td>
+            </tr>
+            <tr>
+              <td>PDK hash</td>
+              <td>Not implemented</td>
+              <td>BLAKE3 hash over all compiled data with stability invariant</td>
+            </tr>
+            <tr>
+              <td>Consumer integration</td>
+              <td>Each consumer has its own technology module</td>
+              <td>All three consumers depend on <code>philis-tech</code> exclusively</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="note danger">
+          <strong>Soundness boundary.</strong> The technology compiler cannot
+          make a PDK correct. Its job is to encode the rules it has access to,
+          classify what it does not have, and make the coverage explicit in
+          every certificate. A <code>CompiledTech</code> with
+          <code>PdkState::SparseResearch</code> is useful for development and
+          prototyping — but it is not a substitute for a foundry-qualified
+          signoff deck. The certificate must always say which.
+        </div>
+
+        <p>
+          <strong>Implementation plan:</strong>
+          <a href="https://github.com/OmarSiwy/Philis/blob/main/crates/tech/PLAN.md"
+            ><code>crates/tech/PLAN.md</code></a
+          >
+        </p>
+      </main>
+    </div>
+
+    <footer class="site-footer">Philis &middot; Analog Layout Engine</footer>
+      <script src="../../nav.js"></script>
+  </body>
+</html>

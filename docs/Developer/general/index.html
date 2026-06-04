@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>General — Philis</title>
+    <link rel="stylesheet" href="../../style.css" />
+    <link rel="icon" type="image/svg+xml" href="../../brand.svg" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../../index.html">
+        <img src="../../brand.svg" alt="Philis" />
+        Philis
+      </a>
+      <nav class="top-nav">
+        <a href="../../index.html">Home</a>
+        <a href="../../Usage/getting-started.html">Usage</a>
+        <a href="../api/index.html" class="active">Developer</a>
+        <a href="https://github.com/OmarSiwy/Philis">GitHub</a>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <h4>Developer</h4>
+        <ul>
+          <li><a href="../general/index.html" class="active">General</a></li>
+          <li><a href="../api/index.html">API</a></li>
+          <li><a href="../geom/index.html">Geometry</a></li>
+          <li><a href="../tech/index.html">Technology</a></li>
+          <li><a href="../verify/index.html">Verify</a></li>
+          <li><a href="../solver/index.html">Solver</a></li>
+          <li><a href="../place/index.html">Place</a></li>
+          <li><a href="../route/index.html">Route</a></li>
+          <li><a href="../constraints/index.html">Constraints</a></li>
+        </ul>
+        <h4>General</h4>
+        <ul>
+          <li><a href="data-oriented-design.html">Data-Oriented Design</a></li>
+        </ul>
+        <h4>Usage</h4>
+        <ul>
+          <li><a href="../../Usage/getting-started.html">Getting Started</a></li>
+          <li><a href="../../Usage/installation.html">Installation</a></li>
+        </ul>
+      </aside>
+
+      <main class="content">
+        <p class="breadcrumb">
+          <a href="../../index.html">Home</a> / Developer / General
+        </p>
+
+        <h1>General Implementation Advice</h1>
+        <p>
+          This section holds the cross-cutting engineering principles the Philis
+          crates are built to. The advice here is deliberately language- and
+          subsystem-agnostic: it explains <em>why</em> a pattern earns its place
+          before any one crate adopts it. The shared
+          <a href="https://github.com/OmarSiwy/Philis/tree/main/crates/utility"
+            ><code>utility</code></a
+          >
+          crate is where these principles become reusable generics and macros &mdash;
+          everything else consumes them.
+        </p>
+
+        <hr />
+
+        <!-- ============================================================== -->
+        <h2>Why data-oriented design matters for EDA tools</h2>
+
+        <p>
+          A layout engine is, at its core, a program that processes
+          <strong>millions of geometric objects</strong> under tight
+          geometric and electrical constraints. A modest analog block has
+          10<sup>4</sup>&ndash;10<sup>5</sup> devices; the rectangles,
+          polygons, via arrays, and routing segments that describe its
+          physical realization can reach 10<sup>6</sup>&ndash;10<sup>7</sup>
+          objects. The placer, router, DRC checker, and extractor all sweep
+          over subsets of these collections thousands of times per run.
+        </p>
+        <p>
+          At this scale, the dominant cost is not floating-point arithmetic
+          &mdash; it is <strong>memory access</strong>. Every cache miss on a
+          modern CPU stalls the pipeline for ~100 cycles (L1 hit ~4 cycles,
+          DRAM ~200+ cycles). An inner loop that touches two fields of a
+          96-byte struct wastes 83% of every cache-line fetch. Multiply
+          that by 10<sup>6</sup> elements and 10<sup>3</sup> iterations,
+          and the wasted bandwidth dwarfs the useful computation.
+        </p>
+        <p>
+          Data-oriented design (DOD) is the discipline of organizing data
+          structures so that the memory the CPU fetches is the memory the
+          algorithm actually reads. The headline technique &mdash;
+          <strong>struct-of-arrays (SoA) over array-of-structs (AoS)</strong>
+          &mdash; splits a collection so that each field lives in its own
+          contiguous array. A loop that reads only coordinates streams only
+          coordinates; a loop that reads only net indices streams only net
+          indices. The secondary techniques &mdash; indexes over pointers,
+          encode-don't-store, bit-packing, padding elimination &mdash; shrink
+          each element further, fitting more useful data per cache line.
+        </p>
+        <p>
+          The measured payoff is substantial. Andrew Kelley's Zig compiler
+          refactor (Handmade Seattle, 2021) achieved
+          <strong>1.3&times;&ndash;3&times; wall-clock speedups</strong> from
+          SoA and element-shrinking alone, with no algorithmic change. For
+          Philis, where placement and routing are already the runtime
+          bottleneck, this is not a micro-optimization &mdash; it is the
+          single largest lever available before touching the algorithm.
+        </p>
+
+        <!-- ============================================================== -->
+        <h2>How cache performance affects placement and routing runtime</h2>
+
+        <p>
+          Consider the concrete workload profile of a signoff-first placer:
+        </p>
+        <ul>
+          <li>
+            <strong>Overlap / spacing (local DRC gate):</strong> reads bounding
+            boxes (<code>x</code>, <code>y</code>, <code>w</code>,
+            <code>h</code>) &mdash; 4 fields out of ~12 per device.
+          </li>
+          <li>
+            <strong>Equivalence check:</strong> reads device type, variant,
+            orientation &mdash; 3 fields.
+          </li>
+          <li>
+            <strong>Intent satisfaction (symmetry / centroid):</strong> reads
+            group ID, axis coordinate &mdash; 2 fields.
+          </li>
+          <li>
+            <strong>Wirelength estimation:</strong> reads net connectivity and
+            terminal positions &mdash; a handful of fields from a different
+            collection entirely.
+          </li>
+        </ul>
+        <p>
+          In AoS layout, every gate fetches the full device record. In SoA
+          layout, each gate streams only the fields it inspects. The cache-
+          traffic reduction factor equals (total fields) / (fields used). For
+          a 12-field device struct where a pass reads 3, that is a
+          <strong>4&times; reduction in memory bandwidth</strong> per pass.
+          The optimizer may evaluate millions of candidates, and each
+          candidate is checked against multiple gates. The savings compound.
+        </p>
+        <p>
+          The same pattern recurs in the router: net-segment collections are
+          scanned for congestion, timing, and DRC feasibility, each reading a
+          different field subset. And in the constraint compiler, rule tables
+          are filtered by layer, by device type, and by rule family &mdash;
+          three different access patterns on the same underlying collection.
+        </p>
+        <p>
+          The upshot: <strong>cache-aware data layout is not an
+          afterthought for Philis; it is a first-class design axis</strong>,
+          on par with algorithm selection and constraint modeling. The
+          <code>utility</code> crate exists to make it cheap to adopt.
+        </p>
+
+        <!-- ============================================================== -->
+        <h2>Why Rust</h2>
+
+        <p>
+          EDA tools have been written in C and C++ for decades, and newer
+          projects have turned to Python. Philis is written in Rust for four
+          concrete reasons:
+        </p>
+
+        <ol>
+          <li>
+            <p>
+              <strong>Ownership and borrowing as a design discipline.</strong>
+              A layout engine's data flow is naturally a DAG of owned
+              collections &mdash; the PDK owns technology records, the placer
+              borrows them, the router borrows placer output. Rust's ownership
+              model encodes this DAG in the type system. Aliasing bugs,
+              use-after-free, and iterator invalidation &mdash; common sources
+              of silent corruption in C++ EDA code &mdash; are compile-time
+              errors in Rust. For a tool that must be <em>correct</em> (a
+              misplaced rectangle is a silicon bug), eliminating these failure
+              modes at compile time is worth more than any runtime check.
+            </p>
+          </li>
+          <li>
+            <p>
+              <strong>No garbage-collector pauses.</strong> Python and Java
+              EDA tools suffer GC pauses that are unpredictable and
+              proportional to heap size. A layout engine's heap is large (the
+              entire design lives in memory) and long-lived (the solver
+              iterates for minutes). GC pauses during inner-loop iteration
+              destroy cache locality and inject latency jitter. Rust's
+              deterministic drop semantics mean memory is freed at scope exit,
+              not at the GC's discretion, and the allocator never walks the
+              heap to find garbage.
+            </p>
+          </li>
+          <li>
+            <p>
+              <strong>Zero-cost abstractions for DOD.</strong> Rust's trait
+              system, const generics, and monomorphization mean that a
+              generic <code>DataVec&lt;T&gt;</code> compiles to the same
+              machine code as a hand-rolled per-field array &mdash; there is
+              no vtable, no boxing, no indirection penalty. The abstraction
+              (a <code>Vec</code>-like API) is free at runtime; the
+              specialization (SoA layout) is resolved at compile time.
+            </p>
+          </li>
+          <li>
+            <p>
+              <strong>Proc macros for mechanical DOD transforms.</strong>
+              The SoA split, padding elimination, index-width selection,
+              and boolean-out-of-band extraction are all mechanical
+              transforms on a struct's field list. Rust's procedural macro
+              system lets <code>utility</code> implement these as
+              <code>#[derive(DataOptimize)]</code> &mdash; the developer
+              annotates a struct, and the macro emits the transformed
+              storage with an identical API. This is the Rust analog of
+              Zig's <code>comptime</code> reflection or Odin's
+              <code>#soa</code> directive, adapted to Rust's token-level
+              macro model.
+            </p>
+          </li>
+        </ol>
+
+        <!-- details: Why not C++? -->
+        <details>
+          <summary>Why not C++ (the traditional EDA language)?</summary>
+          <div class="details-body">
+            <p>
+              C++ is the incumbent language for commercial EDA, and its
+              performance ceiling is comparable to Rust's. The reasons Philis
+              does not use it are ergonomic and safety-related, not
+              performance-related:
+            </p>
+            <ul>
+              <li>
+                <strong>Memory safety is manual.</strong> C++ has no ownership
+                model. Aliasing, dangling pointers, iterator invalidation,
+                and use-after-move are all legal programs that silently
+                produce wrong results. In an EDA tool, a silent data
+                corruption can propagate through placement and routing and
+                surface only at silicon, where the cost of a bug is
+                measured in months and millions of dollars. Rust eliminates
+                these bug classes at compile time.
+              </li>
+              <li>
+                <strong>DOD generics require reflection that C++ lacks
+                (until C++26).</strong> A generic SoA container needs to
+                enumerate a struct's fields at compile time. C++ had no
+                native way to do this until P2996 (adopted into the C++26
+                working draft in 2025, with partial compiler support).
+                Before P2996, the options were X-macros, Boost.PFR on
+                aggregates only, or hand-rolled <code>tuple&lt;vector&lt;F&gt;...&gt;</code>.
+                Rust's proc macros have provided this capability since
+                Rust 1.0 (2015).
+              </li>
+              <li>
+                <strong>Build-system complexity.</strong> C++ builds require
+                a build system (CMake, Bazel, Meson), a package manager
+                (Conan, vcpkg), and significant configuration per platform.
+                Rust's <code>cargo</code> unifies building, testing,
+                benchmarking, documentation, and dependency management in a
+                single tool, with reproducible lockfiles. For a project that
+                targets Rust + Python (via PyO3) + CLI, the reduction in
+                build infrastructure is substantial.
+              </li>
+              <li>
+                <strong>Ecosystem for the Python bridge.</strong> Philis
+                exposes a Python API via PyO3/Maturin, which provides
+                zero-copy, type-safe bindings with automatic
+                <code>__init__</code>/<code>__repr__</code>/<code>__eq__</code>
+                generation. The equivalent C++ path (pybind11) is mature
+                but requires more boilerplate and has no ownership-model
+                integration.
+              </li>
+            </ul>
+            <p>
+              None of this means C++ EDA tools are bad &mdash; decades of
+              proven commercial tools demonstrate otherwise. The argument is
+              that for a <em>new</em> project starting today, Rust offers
+              stronger correctness guarantees and better DOD tooling at the
+              same performance level.
+            </p>
+          </div>
+        </details>
+
+        <!-- details: Why not Python-first? -->
+        <details>
+          <summary>Why not Python-first (like ALIGN, MAGICAL)?</summary>
+          <div class="details-body">
+            <p>
+              Several recent academic analog layout tools (ALIGN from
+              Minnesota/Intel, MAGICAL from UT Austin) are written primarily
+              in Python, with C++ acceleration for hot paths. This approach
+              has real advantages: rapid prototyping, a large ecosystem of
+              ML/optimization libraries (PyTorch, OR-Tools, scipy), and low
+              barrier to entry for researchers.
+            </p>
+            <p>
+              Philis does not follow this path for three reasons:
+            </p>
+            <ul>
+              <li>
+                <strong>Performance floor, not ceiling.</strong> A Python-first
+                tool's inner loops are either pure Python (10&ndash;100&times;
+                slower than native) or C++ extensions (which require crossing
+                the FFI boundary per call and duplicating data structures across
+                languages). Philis's placer and router are designed as
+                tight iterative solvers where the inner loop is the entire
+                program &mdash; there is no "glue code" that can afford to be
+                slow.
+              </li>
+              <li>
+                <strong>GC pauses destroy cache locality.</strong> CPython's
+                reference-counting GC (plus the cyclic collector) walks the
+                heap at unpredictable intervals. For a layout engine whose
+                working set is tens of megabytes of geometric data, these
+                pauses evict hot cache lines and inject latency spikes that
+                are invisible to profiling but real in wall-clock time.
+              </li>
+              <li>
+                <strong>DOD is impossible in Python.</strong> Python objects
+                are heap-allocated, boxed, and pointer-chased. There is no
+                way to lay out a million device records as contiguous
+                SoA arrays in CPython &mdash; every object is a
+                <code>PyObject*</code> with a refcount header. NumPy
+                provides contiguous typed arrays, but only for numeric
+                types, not for heterogeneous struct-of-arrays with
+                mixed-type fields.
+              </li>
+            </ul>
+            <p>
+              Philis instead provides a <strong>Python API as a thin
+              facade</strong> over the Rust engine (via PyO3). The Python
+              user gets the ergonomics of
+              <code>circuit.place_and_route()</code> while the engine runs
+              at native speed with native data layout. The Python layer is
+              a caller, not an implementer.
+            </p>
+          </div>
+        </details>
+
+        <!-- details: Why not Zig? -->
+        <details>
+          <summary>Why not Zig (which has native DOD support)?</summary>
+          <div class="details-body">
+            <p>
+              Zig is, in many ways, the ideal language for data-oriented
+              design. Its <code>comptime</code> reflection gives the
+              standard library enough information to ship
+              <code>MultiArrayList(T)</code> &mdash; the exact SoA generic
+              that Philis's <code>DataVec</code> aims to replicate. The
+              <a href="data-oriented-design.html">DOD survey</a> documents
+              this in detail.
+            </p>
+            <p>
+              Philis does not use Zig for practical reasons:
+            </p>
+            <ul>
+              <li>
+                <strong>Ecosystem maturity.</strong> Zig's package ecosystem
+                is young. There is no equivalent of PyO3 for Python
+                bindings, no mature GDSII/OASIS reader, no established
+                SPICE parser, and no widely-used constraint solver
+                bindings. Philis would need to write or port all of these
+                from scratch.
+              </li>
+              <li>
+                <strong>Language stability.</strong> Zig has not reached 1.0.
+                The standard library API changes between releases (the
+                <code>StructField.default_value</code> &rarr;
+                <code>default_value_ptr</code> rename is one example).
+                Building a multi-year EDA project on a pre-1.0 language
+                creates ongoing migration burden.
+              </li>
+              <li>
+                <strong>Safety model.</strong> Zig is safer than C but does
+                not have Rust's ownership/borrowing system. Aliasing and
+                use-after-free are runtime errors (via debug-mode safety
+                checks), not compile-time errors. For a tool where
+                correctness is paramount, Rust's compile-time guarantees
+                are preferable.
+              </li>
+              <li>
+                <strong>Hiring and collaboration.</strong> Rust has a
+                larger and more established community, more learning
+                resources, and broader industry adoption. For a project
+                that intends to attract contributors, the practical
+                talent pool matters.
+              </li>
+            </ul>
+            <p>
+              The DOD gap &mdash; Zig's <code>comptime</code> can observe
+              field layouts while Rust's proc macros cannot &mdash; is real
+              but bounded. The <a href="data-oriented-design.html">DOD
+              page</a> shows that Rust's proc-macro approach covers all the
+              mechanical transforms (SoA split, field enumeration, index
+              newtypes) and falls short only on layout-dependent decisions
+              (size/alignment queries), which can be handled by annotations
+              or profile-guided mode. The tradeoff is accepted.
+            </p>
+          </div>
+        </details>
+
+        <hr />
+
+        <!-- ============================================================== -->
+        <h2>Guides</h2>
+        <table>
+          <tr>
+            <th>Topic</th>
+            <th>What it covers</th>
+          </tr>
+          <tr>
+            <td><a href="data-oriented-design.html">Data-Oriented Design</a></td>
+            <td>
+              How layout-aware data structures (SoA vs. AoS, indexes over
+              pointers, encoding) win cache and memory &mdash; surveying how Zig
+              and other compile-time-rich languages expose these as generics, and
+              how <code>utility</code>'s <code>DataVec</code> family maps onto
+              that prior art.
+            </td>
+          </tr>
+        </table>
+
+        <div class="note">
+          <strong>Charter reminder:</strong> the <code>utility</code> crate
+          ships <em>only</em> generics and macros &mdash; no real implementation.
+          These guides justify what belongs there and keep call sites in the
+          other crates free of hand-rolled layout bookkeeping.
+        </div>
+      </main>
+    </div>
+
+    <footer class="site-footer">Philis &middot; Analog Layout Engine</footer>
+    <script src="../../nav.js"></script>
+  </body>
+</html>

@@ -1,0 +1,867 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Verify — Philis</title>
+    <link rel="stylesheet" href="../../style.css" />
+    <link rel="icon" type="image/svg+xml" href="../../brand.svg" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../../index.html">
+        <img src="../../brand.svg" alt="Philis" />
+        Philis
+      </a>
+      <nav class="top-nav">
+        <a href="../../index.html">Home</a>
+        <a href="../../Usage/getting-started.html">Usage</a>
+        <a href="../api/index.html" class="active">Developer</a>
+        <a href="https://github.com/OmarSiwy/Philis">GitHub</a>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <h4>Developer</h4>
+        <ul>
+          <li><a href="../api/index.html">API</a></li>
+          <li><a href="../geom/index.html">Geometry</a></li>
+          <li><a href="../tech/index.html">Technology</a></li>
+          <li>
+            <a href="../verify/index.html" class="active">Verify</a>
+          </li>
+          <li><a href="../solver/index.html">Solver</a></li>
+          <li><a href="../place/index.html">Place</a></li>
+          <li><a href="../route/index.html">Route</a></li>
+          <li><a href="../constraints/index.html">Constraints</a></li>
+        </ul>
+        <h4>Verify</h4>
+        <ul>
+          <li><a href="index.html" class="active">Overview</a></li>
+        </ul>
+        <h4>Usage</h4>
+        <ul>
+          <li>
+            <a href="../../Usage/getting-started.html">Getting Started</a>
+          </li>
+          <li><a href="../../Usage/installation.html">Installation</a></li>
+        </ul>
+      </aside>
+
+      <main class="content">
+        <p class="breadcrumb">
+          <a href="../../index.html">Home</a> / Developer / Verify
+        </p>
+
+        <h1>The Philis Verification Crate</h1>
+        <p>
+          <strong>Status:</strong> design reference. This section specifies the
+          target contract for <code>crates/verify</code>
+          (<code>philis_verify</code>), the shared verification library that
+          provides DRC, LVS, and PEX predicates to both the placement and
+          routing engines. Nothing here is implemented yet &mdash; see
+          <a href="#status">Implementation status</a>.
+        </p>
+
+        <blockquote>
+          <p>
+            <strong>The one-sentence thesis.</strong> DRC rule predicates,
+            connectivity tracking, and parasitic extraction formulas are
+            <strong>domain-neutral computation</strong> &mdash; they depend on
+            geometry and technology parameters, not on whether the caller is
+            placing devices or routing wires. The verify crate owns the
+            predicates and types; the checking loops stay in the consumers.
+          </p>
+        </blockquote>
+
+        <h2 id="why-unify">Why unify DRC, LVS, and PEX in one crate?</h2>
+        <p>
+          Both the placement engine (<code>crates/place</code>) and the routing
+          engine (<code>crates/route</code>) need verification infrastructure.
+          Without a shared crate, each engine would re-implement the same rule
+          predicates, the same violation types, and the same parasitic formulas
+          &mdash; with inevitable divergence. A spacing rule that place checks
+          one way and route checks another produces contradictory results that
+          the constraint certificate cannot reconcile.
+        </p>
+        <p>
+          The unification is at the <em>predicate</em> level, not the
+          <em>loop</em> level. Place and route have fundamentally different
+          iteration patterns:
+        </p>
+        <ul>
+          <li>
+            <strong>Place</strong> runs a broad-phase R-tree query to find
+            device-pair candidates, then calls DRC predicates in a narrow-phase
+            loop over each candidate pair. The iteration order is
+            device-centric: every device pair within the influence radius is
+            checked.
+          </li>
+          <li>
+            <strong>Route</strong> runs an incremental commit-time delta loop.
+            When a wire segment is added or removed, route dilates its bounding
+            box by <code>r_max</code> to form a <code>DrcRegion</code>, queries
+            the spatial index for nearby geometry, and calls predicates on each
+            candidate. The iteration is edit-centric: only geometry affected by
+            the edit is re-checked.
+          </li>
+        </ul>
+        <p>
+          These loops are domain-specific and must stay in their respective
+          crates. What the verify crate provides is the <em>pure functions</em>
+          that both loops call: given two rectangles and a rule parameter,
+          return a violation or nothing. This separation ensures that the
+          predicates are tested once, the violation types are defined once, and
+          any predicate bug is fixed in one place.
+        </p>
+
+        <h2 id="dependency-graph">Dependency graph</h2>
+        <pre><code>philis-geom ──┐
+              ├──→ philis-verify
+philis-tech ──┘       ↑          ↑
+                       │          │
+                 philis-place  philis-route</code></pre>
+        <p>
+          The verify crate depends on <code>philis-geom</code> for
+          <code>Rect</code>, coordinate types, and spatial query interfaces,
+          and on <code>philis-tech</code> for <code>RuleSet</code>,
+          <code>LayerId</code>, and <code>ExtractModel</code> (sheet
+          resistance, capacitance parameters, via tables). It does
+          <strong>not</strong> depend on place or route &mdash; the dependency
+          arrow is strictly upward.
+        </p>
+
+        <h2 id="drc">DRC rule predicates</h2>
+        <p>
+          The DRC module provides fourteen rule predicates, each a pure
+          function that takes geometry and rule parameters and returns
+          <code>Option&lt;DrcViolation&gt;</code>. The caller is responsible
+          for broad-phase filtering; predicates assume the candidate pair is
+          plausible (i.e., within the influence radius).
+        </p>
+
+        <h3>The predicate catalogue</h3>
+        <table>
+          <thead>
+            <tr><th>Predicate</th><th>Inputs</th><th>Checks</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>check_spacing</code></td>
+              <td>two rects, layer, min_spacing, same_net</td>
+              <td>Edge-to-edge distance &ge; min_spacing</td>
+            </tr>
+            <tr>
+              <td><code>check_width</code></td>
+              <td>one rect, layer, min_width</td>
+              <td>min(width, height) &ge; min_width</td>
+            </tr>
+            <tr>
+              <td><code>check_enclosure</code></td>
+              <td>outer rect, inner rect, layer, min_enclosure</td>
+              <td>All four sides' enclosure &ge; min_enclosure</td>
+            </tr>
+            <tr>
+              <td><code>check_area</code></td>
+              <td>one rect, layer, min_area</td>
+              <td>rect.area() &ge; min_area</td>
+            </tr>
+            <tr>
+              <td><code>check_eol_spacing</code></td>
+              <td>two rects, layer, eol_width, eol_space, eol_within</td>
+              <td>Enlarged spacing near end-of-line edges</td>
+            </tr>
+            <tr>
+              <td><code>check_prl_spacing</code></td>
+              <td>two rects, layer, prl_threshold, prl_spacing</td>
+              <td>Enlarged spacing when parallel run length &ge; threshold</td>
+            </tr>
+            <tr>
+              <td><code>check_overlap</code></td>
+              <td>two rects, layer, same_net</td>
+              <td>No intersection area when different-net</td>
+            </tr>
+            <tr>
+              <td><code>check_cut_spacing</code></td>
+              <td>two via cut rects, cut layer, min_cut_spacing</td>
+              <td>Edge-to-edge distance between cuts</td>
+            </tr>
+            <tr>
+              <td><code>check_same_net_notch</code></td>
+              <td>two rects (same net), layer, min_notch_width, max_notch_length</td>
+              <td>No narrow channel between same-net shapes</td>
+            </tr>
+            <tr>
+              <td><code>check_grid_snap</code></td>
+              <td>one rect, layer, grid_pitch</td>
+              <td>All edge coordinates are multiples of grid_pitch</td>
+            </tr>
+            <tr>
+              <td><code>check_well_spacing</code></td>
+              <td>two well rects, well layer, min_well_spacing</td>
+              <td>Well-to-well distance</td>
+            </tr>
+            <tr>
+              <td><code>check_well_enclosure</code></td>
+              <td>well rect, diffusion rect, well layer, min_well_enc</td>
+              <td>Well extension beyond diffusion on all sides</td>
+            </tr>
+            <tr>
+              <td><code>check_implant_spacing</code></td>
+              <td>two implant rects, implant layer, min_implant_spacing</td>
+              <td>Implant-to-implant distance</td>
+            </tr>
+            <tr>
+              <td><code>check_outline_exceed</code></td>
+              <td>one rect, cell boundary, layer</td>
+              <td>Shape lies entirely within the cell boundary</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>Predicate invariants</h3>
+        <p>
+          Every predicate satisfies these invariants, tested by property-based
+          fuzzing:
+        </p>
+        <ul>
+          <li>
+            <strong>Symmetry.</strong> For two-shape predicates,
+            <code>check_*(a, b, ...) == check_*(b, a, ...)</code>. The order
+            of arguments does not affect the result.
+          </li>
+          <li>
+            <strong>Orthogonality.</strong> <code>check_spacing</code> never
+            fires on overlapping shapes (that is <code>check_overlap</code>'s
+            job). <code>check_overlap</code> never fires on same-net shapes
+            (those are merged). Each predicate owns exactly one failure mode.
+          </li>
+          <li>
+            <strong>Determinism.</strong> Same inputs always produce the same
+            output. No internal state, no randomness, no floating-point
+            dependence in the decision (all comparisons are integer nm).
+          </li>
+          <li>
+            <strong>Complete metadata.</strong> Every returned
+            <code>DrcViolation</code> carries the rule ID, layer, both shape
+            references, the violation region (for UI highlighting), the
+            required value, and the actual measured value. The consumer never
+            needs to re-derive this information.
+          </li>
+        </ul>
+
+        <h3 id="violation-kinds">The ViolationKind taxonomy</h3>
+        <p>
+          All DRC violations are classified by a closed 14-variant enum. This
+          taxonomy is shared across place and route, ensuring that violation
+          counts, coverage tracking, and certificate reporting use the same
+          vocabulary.
+        </p>
+        <pre><code>pub enum ViolationKind {
+    Overlap,          // different-net shapes intersect
+    Spacing,          // edge-to-edge distance too small
+    Width,            // shape narrower than min width
+    Enclosure,        // outer shape does not extend far enough
+    Area,             // shape area below minimum
+    EOL,              // end-of-line enlarged spacing
+    PRL,              // parallel-run-length dependent spacing
+    CutSpacing,       // via cut-to-cut spacing
+    SameNetNotch,     // narrow notch between same-net shapes
+    GridSnap,         // edge not on manufacturing grid
+    OutlineExceed,    // shape outside cell boundary
+    WellSpacing,      // well-to-well distance
+    WellEnclosure,    // well enclosure of diffusion
+    ImplantSpacing,   // implant-to-implant distance
+}</code></pre>
+
+        <h3>The DrcViolation type</h3>
+        <p>
+          Each violation carries full diagnostic metadata:
+        </p>
+        <pre><code>pub struct DrcViolation {
+    pub kind: ViolationKind,    // which rule category
+    pub rule: RuleId,           // tech-model rule identifier (e.g., "M1.S.1")
+    pub layer: LayerId,         // layer where the violation occurs
+    pub shapes: (ShapeRef, Option&lt;ShapeRef&gt;),  // involved shapes
+    pub region: Rect,           // bounding box for highlighting
+    pub required: i64,          // the rule's required value (nm)
+    pub actual: i64,            // the measured value (nm)
+    pub same_net: bool,         // whether the shapes share a net
+}</code></pre>
+        <p>
+          The <code>shapes</code> tuple uses <code>Option</code> for the
+          second element because single-shape violations (Width, Area,
+          GridSnap, OutlineExceed) involve only one shape.
+          <code>ShapeRef</code> is an opaque 64-bit identifier that the
+          caller maps back to its geometry store &mdash; the verify crate
+          never owns or indexes geometry.
+        </p>
+
+        <h2 id="incremental">Bounded-influence incremental model</h2>
+        <p>
+          DRC checking is expensive if done from scratch on every edit. The
+          verify crate supports an incremental model based on
+          <em>bounded influence</em>: a modification to shape S can only
+          create or resolve violations with shapes within distance
+          <code>r_max</code> of S, where <code>r_max</code> is the maximum
+          rule distance in the technology.
+        </p>
+
+        <h3>Influence radius</h3>
+        <pre><code>/// r_max = max(all spacing rules, all EOL within distances,
+///              all enclosure rules, all well spacings,
+///              all implant spacings)
+pub fn compute_r_max(rules: &amp;RuleSet) -&gt; i64;</code></pre>
+        <p>
+          The consumer computes <code>r_max</code> once per technology and
+          caches it. For SKY130, typical <code>r_max</code> values are in the
+          range 200&ndash;500 nm.
+        </p>
+
+        <h3>DrcRegion and DrcDelta</h3>
+        <p>
+          When a shape is modified, the consumer constructs a
+          <code>DrcRegion</code> &mdash; the shape's bounding box dilated by
+          <code>r_max</code> &mdash; and queries its spatial index for all
+          geometry within that region. The narrow-phase predicates run only on
+          those candidates, producing a <code>DrcDelta</code>: the set of
+          violations added and removed by the edit.
+        </p>
+        <pre><code>pub struct DrcRegion {
+    pub origin: Rect,    // original shape bbox
+    pub dilated: Rect,   // origin expanded by r_max on all sides
+    pub r_max: i64,
+}
+
+pub struct DrcDelta {
+    pub added: Vec&lt;DrcViolation&gt;,    // new violations
+    pub removed: Vec&lt;DrcViolation&gt;,  // resolved violations
+}</code></pre>
+        <p>
+          This model is correct because DRC predicates are <em>local</em>:
+          a spacing violation between shapes A and B depends only on A, B,
+          and the rule parameters &mdash; not on any other shape in the
+          design. The influence radius bounds the region where locality
+          holds, and the <code>DrcDelta</code> captures the full effect of
+          the edit on the violation set.
+        </p>
+        <div class="note">
+          <strong>Place vs. route usage.</strong> Place typically runs DRC
+          in batch mode (check all device pairs after a placement move) and
+          uses <code>DrcRegion</code> to scope the batch. Route uses the
+          incremental model directly: every wire commit produces a
+          <code>DrcDelta</code>, and the running violation count is
+          maintained as a prefix sum of deltas. Both patterns use the same
+          <code>DrcRegion</code> and <code>DrcDelta</code> types.
+        </div>
+
+        <h2 id="lvs">LVS connectivity extraction via union-find</h2>
+        <p>
+          The LVS module provides a <code>ConnectivityTracker</code> &mdash;
+          a union-find data structure augmented with net labels &mdash; and
+          a connectivity extraction function that builds the tracker from
+          layout geometry.
+        </p>
+
+        <h3>ConnectivityTracker</h3>
+        <p>
+          Each geometric element (terminal, shape endpoint, via landing) is
+          an element in the union-find. Elements are grouped into components
+          by geometric overlap: if two shapes on the same layer overlap or
+          touch, their elements are unioned. Vias union elements on their
+          upper and lower layers. Net labels propagate through unions.
+        </p>
+        <pre><code>pub struct ConnectivityTracker {
+    parent: Vec&lt;u32&gt;,
+    rank: Vec&lt;u8&gt;,
+    labels: Vec&lt;Option&lt;NetId&gt;&gt;,
+    count: u32,
+}
+
+impl ConnectivityTracker {
+    pub fn new(n: u32) -&gt; Self;
+    pub fn label(&amp;mut self, x: u32, net: NetId);
+    pub fn union(&amp;mut self, x: u32, y: u32) -&gt; UnionResult;
+    pub fn find(&amp;mut self, x: u32) -&gt; u32;
+    pub fn same_component(&amp;mut self, x: u32, y: u32) -&gt; bool;
+    pub fn component_net(&amp;mut self, x: u32) -&gt; Option&lt;NetId&gt;;
+    pub fn invariant_check(&amp;mut self) -&gt; Vec&lt;LvsError&gt;;
+}</code></pre>
+
+        <h3>Union results and error detection</h3>
+        <p>
+          The <code>union</code> operation returns a three-variant result:
+        </p>
+        <ul>
+          <li>
+            <code>AlreadySame</code> &mdash; both elements were already in the
+            same component. No change.
+          </li>
+          <li>
+            <code>Merged</code> &mdash; two components with compatible labels
+            (or at least one unlabeled) were merged successfully.
+          </li>
+          <li>
+            <code>Short</code> &mdash; two components with
+            <em>different</em> net labels were merged. This is an LVS short
+            circuit. The merge still happens (so that subsequent connectivity
+            analysis is correct), but the short is recorded.
+          </li>
+        </ul>
+        <p>
+          The <code>invariant_check</code> method scans all elements and
+          reports two error classes:
+        </p>
+        <ul>
+          <li>
+            <strong>Opens:</strong> elements with the same net label exist in
+            different components. The schematic says they should be connected,
+            but the layout does not connect them.
+          </li>
+          <li>
+            <strong>Shorts:</strong> elements with different net labels exist
+            in the same component. The layout connects nets that should be
+            electrically isolated.
+          </li>
+        </ul>
+
+        <h3>LvsResult</h3>
+        <pre><code>pub struct LvsResult {
+    pub opens: Vec&lt;LvsOpen&gt;,
+    pub shorts: Vec&lt;LvsShort&gt;,
+    pub mismatches: Vec&lt;LvsMismatch&gt;,
+}
+
+pub struct LvsOpen {
+    pub net: NetId,
+    pub components: Vec&lt;Vec&lt;u32&gt;&gt;,  // disconnected groups
+}
+
+pub struct LvsShort {
+    pub nets: Vec&lt;NetId&gt;,      // the incorrectly merged nets
+    pub component: u32,         // the representative element
+}</code></pre>
+
+        <h3>Connectivity extraction algorithm</h3>
+        <p>
+          The <code>extract_connectivity</code> function builds a
+          <code>ConnectivityTracker</code> from layout geometry in three
+          passes:
+        </p>
+        <ol>
+          <li>
+            <strong>Same-layer overlap pass.</strong> For each layer, find
+            all pairs of shapes that overlap or touch and union them.
+          </li>
+          <li>
+            <strong>Via pass.</strong> For each via, find the shapes on the
+            upper and lower layers that the via cuts land on and union them.
+          </li>
+          <li>
+            <strong>Label pass.</strong> Assign net labels from port and pin
+            shapes, then run <code>invariant_check</code> to detect opens
+            and shorts.
+          </li>
+        </ol>
+
+        <h2 id="pex">PEX lumped-element surrogate</h2>
+        <p>
+          The PEX module provides first-order parasitic extraction: lumped
+          resistance, ground capacitance, coupling capacitance, and via
+          resistance per net. These are <strong>surrogate estimates</strong>,
+          not signoff-accurate extraction &mdash; their purpose is to drive
+          placement and routing quality metrics and repair loops. The
+          constraint certificate records them as approximate evidence; true
+          signoff requires an external extraction tool.
+        </p>
+
+        <h3>Parasitic formulas</h3>
+        <table>
+          <thead>
+            <tr><th>Parasitic</th><th>Formula</th><th>Parameters from tech</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Wire resistance</td>
+              <td><code>R = (length / width) * sheet_r</code></td>
+              <td><code>sheet_r</code>: ohms/square per layer</td>
+            </tr>
+            <tr>
+              <td>Ground capacitance</td>
+              <td><code>Cg = L*W*area_cap + 2*L*fringe_cap</code></td>
+              <td><code>area_cap</code> (fF/um&sup2;), <code>fringe_cap</code> (fF/um)</td>
+            </tr>
+            <tr>
+              <td>Same-layer coupling</td>
+              <td><code>Cc = prl * coupling_cap(layer, spacing)</code></td>
+              <td><code>coupling_cap</code>: lookup table from ExtractModel</td>
+            </tr>
+            <tr>
+              <td>Interlayer coupling</td>
+              <td><code>Cc = overlap_area * interlayer_cap</code></td>
+              <td><code>interlayer_cap</code> (fF/um&sup2;)</td>
+            </tr>
+            <tr>
+              <td>Via resistance</td>
+              <td><code>Rvia = r_per_cut / num_cuts</code></td>
+              <td><code>r_per_cut</code>: ohms per single via cut</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>Accuracy expectations</h3>
+        <p>
+          The lumped-element model is intentionally simple. It captures the
+          dominant parasitics &mdash; wire resistance scales with length/width,
+          ground capacitance scales with area, coupling scales with parallel
+          run length &mdash; without attempting to model fringing fields,
+          corner effects, or process variation. Typical accuracy relative to
+          a calibrated extraction tool:
+        </p>
+        <ul>
+          <li>Wire resistance: within 5&ndash;10% for straight segments (no bends).</li>
+          <li>Ground capacitance: within 10&ndash;20% (fringe cap approximation).</li>
+          <li>Coupling capacitance: within 20&ndash;40% (spacing-dependent lookup, no 3D field solving).</li>
+          <li>Via resistance: within 5% (direct lookup, well-characterized by foundry).</li>
+        </ul>
+        <p>
+          This is sufficient for ranking layout candidates, detecting
+          outliers, and flagging matched-group parasitic deltas. It is
+          <strong>not</strong> sufficient for signoff. The constraint
+          certificate distinguishes between internal (approximate) and
+          external (calibrated) extraction evidence.
+        </p>
+
+        <h3>NetParasitics and incremental update</h3>
+        <pre><code>pub struct NetParasitics {
+    pub total_r: f64,       // total wire resistance (ohms)
+    pub total_cg: f64,      // total ground capacitance (fF)
+    pub total_cc: f64,      // total coupling capacitance (fF)
+    pub total_rvia: f64,    // total via resistance (ohms)
+    pub segments: Vec&lt;SegmentParasitics&gt;,
+}
+
+impl NetParasitics {
+    pub fn add_segment(&amp;mut self, seg: SegmentParasitics);
+    pub fn remove_segment(&amp;mut self, shape: ShapeRef);
+    pub fn recompute_totals(&amp;mut self);
+}</code></pre>
+        <p>
+          The incremental interface allows the routing engine to maintain
+          running parasitic totals across commit/rollback cycles without
+          recomputing from scratch. After a batch of incremental updates,
+          <code>recompute_totals</code> eliminates floating-point drift by
+          re-summing from the segment list.
+        </p>
+
+        <h3>PexOutlier detection</h3>
+        <p>
+          The <code>detect_outliers</code> function scans a set of
+          <code>NetParasitics</code> and flags nets whose parasitics exceed
+          absolute thresholds or whose parasitic deltas within a matched
+          group exceed the group's budget. Outlier kinds:
+        </p>
+        <ul>
+          <li><code>HighResistance</code> &mdash; total wire R exceeds threshold</li>
+          <li><code>HighCoupling</code> &mdash; total coupling Cc exceeds threshold</li>
+          <li><code>HighGroundCap</code> &mdash; total ground Cg exceeds threshold</li>
+          <li><code>HighViaResistance</code> &mdash; total via R exceeds threshold</li>
+          <li><code>MatchedGroupDelta</code> &mdash; parasitic difference between matched nets exceeds budget</li>
+        </ul>
+
+        <h2 id="em-ir-antenna">EM, IR drop, and antenna checking</h2>
+        <p>
+          The EM module provides reliability and manufacturability checks that
+          complement DRC and PEX:
+        </p>
+
+        <h3>Electromigration (EM)</h3>
+        <p>
+          Electromigration causes wire failure when current density exceeds
+          the metal's limit over time. The check uses Black's equation
+          simplified to a threshold comparison:
+        </p>
+        <pre><code>J = I / (width * thickness)    // current density
+if J &gt; J_max &amp;&amp; segment_length &gt; blech_length:
+    emit EmViolation</code></pre>
+        <p>
+          The <strong>Blech filter</strong> exempts short segments: below
+          the Blech product length, back-stress prevents void nucleation
+          regardless of current density. This avoids false violations on
+          via landings and short jogs.
+        </p>
+
+        <h3>Static IR drop</h3>
+        <p>
+          The power/ground network is modeled as a resistive mesh. Wire
+          segments become resistors (using <code>wire_resistance</code>),
+          vias become resistors (using <code>via_resistance</code>), and
+          device terminals are current sinks. The system solves the sparse
+          linear system <code>G * V = I</code> to compute node voltages.
+          The worst-case voltage drop is reported.
+        </p>
+        <pre><code>pub struct IrDropResult {
+    pub node_voltages: Vec&lt;(u32, f64)&gt;,
+    pub worst_drop: f64,
+    pub worst_node: u32,
+    pub converged: bool,
+}</code></pre>
+        <p>
+          The sparse linear solve may delegate to <code>philis-solver</code>
+          for production use. For early development, a direct Cholesky or
+          iterative CG solver within the verify crate is sufficient.
+        </p>
+
+        <h3>Antenna ratio</h3>
+        <p>
+          During fabrication, metal layers act as antennas that collect
+          charge from plasma etching. If the metal area connected to a gate
+          oxide is too large relative to the oxide area, the accumulated
+          charge can damage the gate. The check is:
+        </p>
+        <pre><code>ratio = metal_area / gate_oxide_area
+if ratio &gt; max_ratio:
+    emit AntennaViolation</code></pre>
+        <p>
+          The check is cumulative per layer and runs bottom-up through the
+          metal stack. Antenna violations are typically repaired by adding
+          diode insertions or by re-routing to break the antenna path.
+        </p>
+
+        <h2 id="violation-hierarchy">Violation type hierarchy</h2>
+        <p>
+          The verify crate defines four violation types, each serving a
+          different verification domain:
+        </p>
+        <table>
+          <thead>
+            <tr><th>Type</th><th>Domain</th><th>Key fields</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>DrcViolation</code></td>
+              <td>Design rule checking</td>
+              <td>kind, rule, layer, shapes, region, required, actual</td>
+            </tr>
+            <tr>
+              <td><code>LvsResult</code> (opens/shorts/mismatches)</td>
+              <td>Layout vs. schematic</td>
+              <td>net, components (opens), merged nets (shorts)</td>
+            </tr>
+            <tr>
+              <td><code>EmViolation</code></td>
+              <td>Electromigration</td>
+              <td>shape, layer, j_actual, j_max, ratio</td>
+            </tr>
+            <tr>
+              <td><code>AntennaViolation</code></td>
+              <td>Antenna ratio</td>
+              <td>net, layer, ratio, max_ratio, metal_area, gate_oxide_area</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          Additionally, <code>PexOutlier</code> flags parasitic values that
+          exceed thresholds but is not a violation in the DRC sense &mdash;
+          it is a quality metric that feeds the constraint certificate's
+          bounded obligations.
+        </p>
+        <p>
+          All violation types are designed for the constraint certificate:
+          each carries enough metadata to identify the violation uniquely
+          (for deduplication and tracking across incremental runs), to
+          locate it in the layout (for UI highlighting and repair scoping),
+          and to compare it against the rule's requirement (for pass/fail
+          determination).
+        </p>
+
+        <h2 id="coverage">Coverage tracking</h2>
+        <p>
+          The <code>RuleFamilyCoverage</code> tracker counts how many
+          candidate pairs were checked and how many violations were found,
+          partitioned by <code>ViolationKind</code>. This feeds two
+          purposes:
+        </p>
+        <ul>
+          <li>
+            <strong>Certificate completeness.</strong> The constraint
+            certificate needs to know which rule families were actually
+            exercised. A rule family with zero checks is a coverage gap
+            &mdash; either the design has no geometry on that layer (benign)
+            or the checking loop skipped it (a bug). The
+            <code>unchecked_families</code> method returns the gaps.
+          </li>
+          <li>
+            <strong>Performance diagnostics.</strong> Knowing which rule
+            families dominate the check count helps identify optimization
+            targets (e.g., PRL checks are expensive and may benefit from
+            tighter broad-phase filtering).
+          </li>
+        </ul>
+        <pre><code>pub struct RuleFamilyCoverage {
+    pub checked: HashMap&lt;ViolationKind, u64&gt;,
+    pub violations: HashMap&lt;ViolationKind, u64&gt;,
+}
+
+impl RuleFamilyCoverage {
+    pub fn record_check(&amp;mut self, kind: ViolationKind, violation: bool);
+    pub fn total_checked(&amp;self) -&gt; u64;
+    pub fn total_violations(&amp;self) -&gt; u64;
+    pub fn unchecked_families(&amp;self) -&gt; Vec&lt;ViolationKind&gt;;
+}</code></pre>
+
+        <h2 id="consumers">Consumer integration</h2>
+        <p>
+          The verify crate is consumed by two engines with different
+          integration patterns:
+        </p>
+
+        <h3>Place: device-pair broad/narrow-phase loop</h3>
+        <p>
+          The placement engine maintains an R-tree spatial index of device
+          bounding boxes. After each placement move (swap, shift, mirror),
+          it queries the R-tree for all devices within <code>r_max</code>
+          of the moved device and calls DRC predicates on each candidate
+          pair. The predicates it calls depend on the layer types involved:
+        </p>
+        <ul>
+          <li>Device layers: <code>check_spacing</code>, <code>check_overlap</code></li>
+          <li>Well layers: <code>check_well_spacing</code>, <code>check_well_enclosure</code></li>
+          <li>Implant layers: <code>check_implant_spacing</code></li>
+          <li>All layers: <code>check_grid_snap</code>, <code>check_outline_exceed</code></li>
+        </ul>
+        <p>
+          Place also uses <code>ConnectivityTracker</code> for equivalence
+          checking (verifying that a placement preserves the schematic's
+          connectivity) and <code>NetParasitics</code> to estimate parasitic
+          impact of device placement (wire length estimates from placement
+          coordinates).
+        </p>
+
+        <h3>Route: incremental commit-time delta loop</h3>
+        <p>
+          The routing engine maintains a per-layer spatial index of wire
+          segments and vias. When a segment is committed, route:
+        </p>
+        <ol>
+          <li>
+            Constructs a <code>DrcRegion</code> from the new segment's
+            bounding box.
+          </li>
+          <li>
+            Queries the spatial index for all geometry within the dilated
+            region.
+          </li>
+          <li>
+            Calls the full set of applicable predicates:
+            <code>check_spacing</code>, <code>check_eol_spacing</code>,
+            <code>check_prl_spacing</code>, <code>check_width</code>,
+            <code>check_enclosure</code> (for via enclosure),
+            <code>check_cut_spacing</code>, <code>check_same_net_notch</code>.
+          </li>
+          <li>
+            Produces a <code>DrcDelta</code> that is merged into the
+            running violation state.
+          </li>
+          <li>
+            Updates <code>NetParasitics</code> incrementally (add the new
+            segment's contribution).
+          </li>
+          <li>
+            Updates <code>ConnectivityTracker</code> with the new
+            connection.
+          </li>
+        </ol>
+        <p>
+          On rollback, the reverse delta is applied: added violations
+          become removed, and the segment's parasitic contribution is
+          subtracted.
+        </p>
+
+        <div class="note warn">
+          <strong>The predicate/loop boundary is load-bearing.</strong>
+          Moving the checking loop into the verify crate would force it to
+          own a spatial index, which means it would need to understand
+          device vs. wire geometry, commit/rollback semantics, and
+          domain-specific iteration orders. That couples the verification
+          library to the engine's internal representation &mdash; exactly
+          the entanglement that makes DRC bugs hard to find and fix. The
+          predicate/loop split keeps the verify crate testable in isolation:
+          hand it two rectangles and a rule, get a violation or not.
+        </div>
+
+        <h2 id="status">Implementation status</h2>
+        <p>
+          This is a formulation and contract. To stay honest about what exists:
+        </p>
+        <table>
+          <thead>
+            <tr><th>Surface</th><th>Today</th><th>Target</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Crate</td>
+              <td><code>crates/verify</code> is an empty scaffold with <code>lib.rs</code> doc comment only</td>
+              <td>Full predicate library with DRC, LVS, PEX, EM/IR/Antenna modules</td>
+            </tr>
+            <tr>
+              <td>DRC predicates</td>
+              <td>None</td>
+              <td>14 rule predicates + ViolationKind enum + DrcViolation type</td>
+            </tr>
+            <tr>
+              <td>Incremental infra</td>
+              <td>None</td>
+              <td>DrcRegion, DrcDelta, compute_r_max, RuleFamilyCoverage</td>
+            </tr>
+            <tr>
+              <td>LVS</td>
+              <td>None</td>
+              <td>ConnectivityTracker (union-find), extract_connectivity, LvsResult</td>
+            </tr>
+            <tr>
+              <td>PEX</td>
+              <td>None</td>
+              <td>NetParasitics, wire/coupling/via models, incremental update, outlier detection</td>
+            </tr>
+            <tr>
+              <td>EM/IR/Antenna</td>
+              <td>None</td>
+              <td>Black's equation + Blech filter, resistive mesh IR drop, antenna ratio check</td>
+            </tr>
+            <tr>
+              <td>Consumer integration</td>
+              <td>Place and route do not call any shared verification predicates</td>
+              <td>Place calls predicates in device-pair loop; route calls in commit-time delta loop</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="note danger">
+          <strong>Soundness boundary.</strong> The verify crate provides
+          <em>surrogate</em> verification &mdash; first-order models
+          sufficient for driving placement and routing quality loops. It does
+          not replace foundry signoff DRC, LVS, or PEX tools. The constraint
+          certificate distinguishes between internal (approximate) evidence
+          from the verify crate and external (calibrated) evidence from
+          signoff tools. A result is <strong>signoff-quality</strong> only if
+          every required hard gate is satisfied by calibrated evidence.
+          Internal evidence alone makes the result
+          <strong>signoff-ready</strong>, not signoff-quality.
+        </div>
+
+        <p>
+          <strong>See also:</strong>
+          <a href="../../index.html">Home</a> &middot;
+          <a href="../place/index.html">Place</a> &middot;
+          <a href="../route/index.html">Route</a> &middot;
+          <a href="../constraints/index.html">Constraints</a>
+        </p>
+      </main>
+    </div>
+
+    <footer class="site-footer">Philis &middot; Analog Layout Engine</footer>
+      <script src="../../nav.js"></script>
+  </body>
+</html>

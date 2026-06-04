@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gates &amp; Quality — Philis</title>
+    <link rel="stylesheet" href="../../style.css" />
+    <link rel="icon" type="image/svg+xml" href="../../brand.svg" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../../index.html">
+        <img src="../../brand.svg" alt="Philis" />
+        Philis
+      </a>
+      <nav class="top-nav">
+        <a href="../../index.html">Home</a>
+        <a href="../../Usage/getting-started.html">Usage</a>
+        <a href="../api/index.html" class="active">Developer</a>
+        <a href="https://github.com/OmarSiwy/Philis">GitHub</a>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <h4>Developer</h4>
+        <ul>
+          <li><a href="../api/index.html">API</a></li>
+          <li><a href="../geom/index.html">Geometry</a></li>
+          <li><a href="../tech/index.html">Technology</a></li>
+          <li><a href="../verify/index.html">Verify</a></li>
+          <li><a href="../solver/index.html">Solver</a></li>
+          <li><a href="../place/index.html">Place</a></li>
+          <li><a href="../route/index.html">Route</a></li>
+          <li>
+            <a href="../constraints/index.html" class="active">Constraints</a>
+          </li>
+        </ul>
+        <h4>Constraints</h4>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="model.html">Canonical Model &amp; Identity</a></li>
+          <li><a href="technology-coverage.html">PDK Technology &amp; Coverage</a></li>
+          <li><a href="gates-and-quality.html" class="active">Gates &amp; Quality</a></li>
+          <li><a href="projections-certificate.html">Projections, Evidence &amp; Certificate</a></li>
+        </ul>
+        <h4>Usage</h4>
+        <ul>
+          <li>
+            <a href="../../Usage/getting-started.html">Getting Started</a>
+          </li>
+          <li><a href="../../Usage/installation.html">Installation</a></li>
+        </ul>
+      </aside>
+
+      <main class="content">
+        <p class="breadcrumb">
+          <a href="../../index.html">Home</a> / Developer /
+          <a href="index.html">Constraints</a> / Gates &amp; Quality
+        </p>
+
+        <h1>Gates &amp; Quality</h1>
+        <p>
+          Acceptance is a strict <strong>lexicographic order</strong>, not a
+          weighted sum. A hard vector dominates a bounded electrical vector, which
+          dominates a soft ranking vector. This is the single most load-bearing
+          decision in the whole subsystem: it is what makes “DRC=0 and LVS=true”
+          un-buyable by any amount of soft quality.
+        </p>
+
+        <h2 id="problem">The formal problem setup</h2>
+        <p>The constraint compiler input is a bundle:</p>
+        <pre><code>I_c = (T_raw, S, H, G, M, O, U, A, B, E_prev)</code></pre>
+        <table>
+          <thead><tr><th>Symbol</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>T_raw</code></td><td>the foundry / open / predictive / overlay PDK bundle.</td></tr>
+            <tr><td><code>S = (D, N, ports)</code></td><td>the schematic graph of devices, nets, and terminals.</td></tr>
+            <tr><td><code>H</code></td><td>the hierarchy graph, including repeated subcircuits and preserved boundaries.</td></tr>
+            <tr><td><code>G</code></td><td>the primitive source catalog: generated devices, imported cells, black boxes, fixed macros, PCells, terminal maps.</td></tr>
+            <tr><td><code>M</code></td><td>the host layout contract: fixed tile, padframe, wrapper, rail map, fixed pins, seal ring, reserved resources, export rules.</td></tr>
+            <tr><td><code>O</code></td><td>fixed geometry, obstacles, prior routes, keepouts, blockages, wells, guard structures, substrate domains, external macros.</td></tr>
+            <tr><td><code>U</code></td><td>explicit user constraints and waivers.</td></tr>
+            <tr><td><code>A</code></td><td>analysis oracles and their declared capabilities (internal DRC/LVS/PEX/EM/ERC, external hooks, deck IDs, corner models, manual-review policies).</td></tr>
+            <tr><td><code>B</code></td><td>the budget vector: runtime, memory, iterations, allowed degraded confidence, electrical bounds, corners, repair limits.</td></tr>
+            <tr><td><code>E_prev</code></td><td>previous evidence from placement, routing, or analysis runs.</td></tr>
+          </tbody>
+        </table>
+        <p>The compiler output is:</p>
+        <pre><code>O_c = (T, F, I, P_place, P_route, P_analysis, K, Q, Cert)</code></pre>
+        <p>
+          where <code>T</code> is the compiled technology model, <code>F</code>
+          the canonical fact graph, <code>I</code> the <code>IntentGraph</code>,
+          the three <code>P_*</code> the consumer
+          <a href="projections-certificate.html#projections">projections</a>,
+          <code>K</code> the contradiction/ambiguity/infeasibility/repair-core
+          set, <code>Q</code> the lexicographic quality &amp; coverage vector, and
+          <code>Cert</code> the replayable
+          <a href="projections-certificate.html#certificate">certificate</a>.
+        </p>
+
+        <h2 id="gates">The lexicographic objective hierarchy</h2>
+        <p>
+          Acceptance is staged through eight ranks. Every rank must pass before
+          the next is even consulted; the order also governs which violation is
+          blamed first.
+        </p>
+        <pre><code>Gate 0  required PDK / deck / host / model coverage            ← hard
+Gate 1  well-formed schematic, hierarchy, terminals, prim maps ← hard
+Gate 2  no contradictory hard intent                           ← hard
+Gate 3  placement-owned DRC and LVS-readiness obligations      ← hard
+Gate 4  terminal access, routing feasibility, route-intent     ← hard
+Gate 5  final DRC = 0 and LVS = true                           ← hard
+Gate 6  PEX, IR, EM, noise, antenna, LDE budgets inside bounds ← bounded
+Rank 7  minimize residual PEX, mismatch, area, wirelength,
+        vias, density stress, runtime                          ← soft</code></pre>
+        <p>
+          Gate&nbsp;0 is intentionally first: a layout cannot be called
+          signoff-quality if the PDK or analysis deck lacks required rule
+          coverage. Gate&nbsp;5 is the explicit system-level acceptance target —
+          the constraints layer tracks the obligation and evidence status while
+          analysis and trusted external decks provide the final proof.
+          Gate&nbsp;6 captures the parasitic-quality goal: minimize PEX
+          <em>only after</em> DRC and LVS are feasible, and enforce explicit
+          bounds before any soft ranking.
+        </p>
+
+        <h2 id="vectors">The three quality vectors</h2>
+        <p>
+          Let <code>x</code> be a complete or partial layout state. The problem
+          defines <code>H_i(x) = 0</code> for every hard violation count,
+          <code>B_j(x) ≤ bound_j</code> for every bounded metric, and
+          <code>S_k(x)</code> minimized only after all <code>H_i</code> and
+          <code>B_j</code> pass.
+        </p>
+        <pre><code>hard(x) = (
+  missing_required_coverage,
+  malformed_input,
+  contradictory_hard_intent,
+  primitive_or_terminal_LVS_readiness_failures,
+  placement_owned_DRC_failures,
+  missing_terminal_access,
+  routing_required_connectivity_failures,
+  final_DRC_violations,
+  final_LVS_mismatches)
+
+bounded(x) = (
+  PEX_resistance_bound_excess,
+  PEX_ground_cap_bound_excess,
+  PEX_coupling_bound_excess,
+  matched_group_delta_excess,
+  IR_drop_excess,
+  EM_margin_deficit,
+  crosstalk_or_noise_excess,
+  antenna_margin_deficit,
+  LDE_or_thermal_bound_excess)
+
+soft(x) = (
+  residual_weighted_PEX_damage,
+  residual_matching_slack,
+  area,
+  HPWL_or_route_length,
+  via_count,
+  density_stress,
+  fill_and_DFM_cost,
+  runtime,
+  repair_iterations)</code></pre>
+        <p>Candidate <code>x_a</code> is better than <code>x_b</code> iff:</p>
+        <pre><code>hard(x_a) lexicographically improves hard(x_b),  OR
+hard(x_a) = hard(x_b) = 0  AND  bounded(x_a) lex-improves bounded(x_b),  OR
+hard and bounded both feasible  AND  soft(x_a) improves soft(x_b)</code></pre>
+
+        <h2 id="scalarization">Why scalarization specifically fails</h2>
+        <p>
+          The lexicographic order is not stylistic; weighted penalties are
+          provably unsound. Suppose a single objective
+          <code>Φ(x) = w_h·hard(x) + w_b·bounded(x) + w_s·soft(x)</code> with
+          positive weights. For any finite <code>w_h</code>, take a DRC-dirty
+          candidate <code>x₁</code> with one hard violation and a DRC-clean
+          candidate <code>x₂</code> whose only deficit is a worse soft score.
+          Whenever <code>soft(x₂) − soft(x₁) &gt; w_h / w_s</code>, we get
+          <code>Φ(x₁) &lt; Φ(x₂)</code> — the DRC-dirty layout <em>wins</em>. No
+          finite weights close this hole for all inputs, because the soft metrics
+          (area, wirelength, vias) are unbounded above. The only way to make a
+          hard violation un-buyable is to compare hard counts <em>first</em> and
+          consult soft scores <em>only on ties</em> — which is the lexicographic
+          order, equivalently the unreachable limit <code>w_h/w_s → ∞</code>.
+        </p>
+        <div class="note danger">
+          <strong>The gate property.</strong> A scalar penalty fails the gate
+          property by construction; lexicographic ordering satisfies it by
+          construction. Backends may still use scalar costs <em>within</em> a
+          fixed gate, but the public acceptance relation stays staged and
+          evidence-carrying.
+        </div>
+
+        <h2 id="theory">The theory behind the gate</h2>
+        <p>
+          <strong>Constraint hierarchies.</strong> Borning's constraint-hierarchy
+          theory formalizes over-constrained systems with a distinguished
+          <em>required</em> level <code>H₀</code> that must hold exactly and
+          weaker preferred levels. Every admissible comparator must
+          <em>respect the hierarchy</em>: if some valuation satisfies all
+          constraints through level <code>k</code>, every solution must. The
+          decisive theorem is that no aggregation across levels lets a weaker
+          level override a stronger one — a constraint at a given strength
+          “completely dominates” any number of weaker ones. Philis's
+          hard&nbsp;≻&nbsp;bounded&nbsp;≻&nbsp;soft order is a constraint hierarchy
+          with <code>H₀</code> the hard vector; the comparator is the
+          locally-predicate-better comparator. The gate semantics is a 30-year-old
+          result about why required constraints cannot be priced, not a Philis
+          invention.
+        </p>
+        <p>
+          <strong>Semiring / valued CSP.</strong> The quality algebra is a
+          c-semiring <code>(A, ⊕, ⊗, 0, 1)</code>: <code>⊗</code> combines several
+          constraints' values and <code>⊕</code> chooses among alternatives. Two
+          Philis mechanisms are c-semiring operations: the
+          <a href="technology-coverage.html#meet">coverage meet</a> is a
+          conservative <code>⊗</code> that yields the worst view, and the
+          quality comparator is a <em>partial</em> order (idempotence of
+          <code>⊕</code> guarantees it is well-defined) so genuinely incomparable
+          candidates are reported as incomparable rather than forced into a false
+          ranking. The framework also proves local-consistency propagation is
+          sound under any c-semiring — the licence to run cheap local conflict
+          detection before invoking the exact solver.
+        </p>
+
+        <h2 id="realized">The realized placement gates</h2>
+        <p>
+          The system-level gates above are split by ownership across stages. The
+          placement-owned subset is already encoded in the public API as
+          <code>AcceptanceGate</code> (<code>crates/api/src/core.rs</code>), with
+          the realized evaluation order in <code>ACCEPTANCE_GATE_ORDER</code>:
+        </p>
+        <pre><code>TechnologyCoverage → LocalDrc → DeviceEquivalence
+  → TerminalAccess → Routability → IntentSatisfaction</code></pre>
+        <p>
+          The realized order deliberately differs from the design-rationale order:
+          <code>LocalDrc</code> runs before <code>DeviceEquivalence</code> (it is
+          the cheapest high-yield rejector) and <code>IntentSatisfaction</code>
+          runs last (it is repairable before legalization). Only
+          <code>LocalDrc</code> and <code>IntentSatisfaction</code> are
+          <code>is_repairable()</code>; the rest are terminal — legalization
+          cannot conjure a missing rule deck, device generator, access set, or
+          channel capacity, so their failure produces a conflict core. Each gate
+          yields a <code>GateStatus</code> of <code>Pass</code> /
+          <code>Degraded</code> / <code>Fail</code>, and a result is
+          signoff-quality only when <em>every</em> gate is <code>Pass</code> on
+          coded evidence (<code>PlacementCertificate::is_signoff_quality</code>).
+        </p>
+        <div class="note">
+          <strong>Realized class &amp; coverage subsets.</strong> The realized
+          <code>IntentClass</code> (<code>Hard | Bounded | Soft | Unsupported</code>)
+          and <code>CoverageClass</code>
+          (<code>Coded | ExternalOnly | Unsupported</code>) are the subsets of the
+          canonical seven-class
+          <a href="model.html#class">ObligationClass</a> and nine-valued
+          <a href="model.html#coverage">Coverage</a> that the engine encodes
+          today. They are designed to widen toward the canonical enums without
+          changing the gate semantics — the lexicographic order is invariant to
+          how finely the classes are subdivided.
+        </div>
+
+        <p>
+          <strong>Continue:</strong>
+          <a href="projections-certificate.html">Projections, Evidence &amp; Certificate →</a>
+        </p>
+      </main>
+    </div>
+
+    <footer class="site-footer">Philis &middot; Analog Layout Engine</footer>
+      <script src="../../nav.js"></script>
+  </body>
+</html>

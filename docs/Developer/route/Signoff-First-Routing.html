@@ -1,0 +1,638 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Signoff-First Routing — Philis</title>
+    <link rel="stylesheet" href="../../style.css" />
+    <link rel="icon" type="image/svg+xml" href="../../brand.svg" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../../index.html">
+        <img src="../../brand.svg" alt="Philis" />
+        Philis
+      </a>
+      <nav class="top-nav">
+        <a href="../../index.html">Home</a>
+        <a href="../../Usage/getting-started.html">Usage</a>
+        <a href="../api/index.html" class="active">Developer</a>
+        <a href="https://github.com/OmarSiwy/Philis">GitHub</a>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <h4>Developer</h4>
+        <ul>
+          <li><a href="../api/index.html">API</a></li>
+          <li><a href="../geom/index.html">Geometry</a></li>
+          <li><a href="../tech/index.html">Technology</a></li>
+          <li><a href="../verify/index.html">Verify</a></li>
+          <li><a href="../solver/index.html">Solver</a></li>
+          <li><a href="../place/index.html">Place</a></li>
+          <li>
+            <a href="../route/index.html" class="active">Route</a>
+          </li>
+          <li><a href="../constraints/index.html">Constraints</a></li>
+        </ul>
+        <h4>Route</h4>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="Signoff-First-Routing.html" class="active">Signoff-First Routing</a></li>
+          <li><a href="Router-Algorithms.html">Router Algorithms</a></li>
+          <li><a href="Api-Mapping.html">API Mapping</a></li>
+        </ul>
+        <h4>Usage</h4>
+        <ul>
+          <li>
+            <a href="../../Usage/getting-started.html">Getting Started</a>
+          </li>
+          <li><a href="../../Usage/installation.html">Installation</a></li>
+        </ul>
+      </aside>
+
+      <main class="content">
+        <p class="breadcrumb">
+          <a href="../../index.html">Home</a> / Developer / Route /
+          Signoff-First Problem
+        </p>
+
+        <h1>The Signoff-First Routing Problem</h1>
+        <p>
+          This page is the formal specification the Philis router is built
+          against. It is the implementable form of
+          <code>papers/router/spout-router-problem-setup.md</code>, with every
+          symbol tied to a Philis type where one exists (see
+          <a href="Api-Mapping.html">API Mapping &amp; Stubs</a>).
+        </p>
+
+        <hr />
+
+        <h2 id="inputs">1. Formal problem setup</h2>
+        <p>The router input is the tuple</p>
+        <pre><code>I = (T, S, P, C, O, B)</code></pre>
+        <ul>
+          <li><code>T</code> — the compiled technology model.</li>
+          <li><code>S = (D, N, ports)</code> — the schematic graph of devices, nets, and terminals.</li>
+          <li><code>P</code> — the placement with instance transforms and pin geometry.</li>
+          <li><code>C</code> — explicit and inferred analog routing constraints.</li>
+          <li><code>O</code> — existing obstacles, fixed shapes, keepouts, blockages, guard structures, wells, reserved resources.</li>
+          <li><code>B</code> — the budget vector: runtime, iterations, memory, optional electrical bounds.</li>
+        </ul>
+        <p>
+          Before search, <code>C</code> is compiled into an
+          <strong>IntentGraph</strong>: a typed artifact of hierarchy
+          boundaries, repeated subcircuits, symmetry axes, matched groups,
+          common-centroid arrays, differential pairs, self-symmetric nets,
+          guard-ring closures, shield requirements, substrate-sensitive nets, RF
+          transmission-line classes, high-voltage domains, power-current
+          requirements, and multiport terminal classes. These intents are hard
+          constraints, joint constraints, or bounded objectives — never
+          comments. If intent extraction is ambiguous, the router returns a
+          typed ambiguity diagnosis <em>before</em> search.
+        </p>
+
+        <h3>The compiled technology model</h3>
+        <pre><code>T = (L, G, V, R, E, X, M)</code></pre>
+        <ul>
+          <li><code>L</code> — the ordered layer stack.</li>
+          <li><code>G</code> — the legal manufacturing grid and per-layer routing grid.</li>
+          <li><code>V</code> — the legal via and cut-transition set.</li>
+          <li><code>R</code> — the set of DRC predicates.</li>
+          <li><code>E</code> — per-corner extraction models (R, ground C, coupling C, via R, antenna, EM, IR, crosstalk/noise surrogates).</li>
+          <li><code>X</code> — the connectivity extractor used for LVS.</li>
+          <li><code>M</code> — process metadata: node family, layer classes, color/pattern domains, density windows, thickness, resistivity, permittivity, corner variants.</li>
+        </ul>
+
+        <h3 id="resource-graph">The resource graph</h3>
+        <p>
+          The router builds a directed resource graph
+          <code>G_R = (Q, E_R)</code>. Each vertex <code>q</code> is a legal
+          point, access patch, via origin, or shape anchor on a layer. Each edge
+          is a realizable segment, via transition, jog, patch, or local access
+          feature — <em>not</em> a bare grid arc. Every edge carries process and
+          extraction attributes:
+        </p>
+        <pre><code>attr(e) = (layer, width, enclosure, color, length, R, Cg, Cc_window, rule_mask)</code></pre>
+        <p>
+          Extraction attributes record their calibration source, process corner,
+          coupling context, whether via resistance is merged or separated, and
+          whether topography/density/fill context affects the estimate. Internal
+          extraction is a <em>calibrated surrogate</em> for signoff extraction,
+          not a substitute for the reference deck; where a reference extractor is
+          available the certificate records the delta to a SPEF-equivalent report.
+        </p>
+
+        <h3 id="variables">Decision variables</h3>
+        <pre><code>a[t,k]      = 1 if terminal t uses access candidate k
+x[n,e]      = 1 if net n uses routing edge e
+v[n,u]      = 1 if net n uses via option u
+w[n,e,c]    = 1 if net n uses width/spacing class c on edge e
+sh[n,e]     = 1 if edge e is reserved or used as a shield for net n
+col[n,e,p]  = 1 if edge e uses pattern/color p
+patch[n,p]  = 1 if minimum-area or enclosure patch p is emitted
+st[n,e]     = 1 if edge e uses a stitch or decomposition boundary
+mask[n,e,p] = 1 if edge e is assigned to mask or cut-mask domain p</code></pre>
+        <p>
+          Auxiliary continuous/integer variables track parasitic totals,
+          coupling windows, length-match error, density slack, antenna ratio,
+          and EM current density.
+        </p>
+
+        <h2 id="constraints">2. Feasibility constraints</h2>
+
+        <h3>A. Terminal access</h3>
+        <p>Every required terminal selects at least one legal access candidate:</p>
+        <pre><code>sum_k a[t,k] = 1   for all required terminals t</code></pre>
+        <p>
+          A candidate is legal only if it satisfies grid, layer, pin-shape,
+          via-enclosure, cut-spacing, minimum-area, and obstruction predicates.
+          If no candidate exists, the problem fails <em>before</em> global
+          routing and returns the terminal, instance, layer, and violated
+          predicate set.
+        </p>
+
+        <h3 id="connectivity">B. Connectivity — ILP vs. route-state invariant</h3>
+        <p>
+          For each net, selected access candidates must be connected by used
+          edges. The integer multicommodity-flow form is the
+          <em>specification</em>:
+        </p>
+        <pre><code>sum_out f[n,t,e] - sum_in f[n,t,e] = demand[n,t,q]
+0 &lt;= f[n,t,e] &lt;= x[n,e]</code></pre>
+        <p>It is <em>not</em> the default runtime. The router picks a mode by size and criticality:</p>
+        <ol>
+          <li>
+            <strong>Exact ILP/SMT mode</strong> — only for small, decision-dense
+            clips: pin-access selection, via/color/min-area legality, and tightly
+            coupled differential or common-centroid escapes where the
+            net-ordering problem would otherwise corrupt a matched group.
+          </li>
+          <li>
+            <strong>Route-state-invariant mode</strong> — the default. Per net,
+            maintain a union-find partition of its used edges and terminals and
+            enforce, incrementally after every commit and rip-up: <em>all
+            selected access candidates of n are in one class, and that class
+            touches no other net's class</em>. This invariant is exactly the
+            connectivity-and-no-short feasibility of the ILP restricted to the
+            committed assignment, so the ILP is solved <em>implicitly and
+            certifiably</em> without enumerating its variables.
+          </li>
+        </ol>
+        <p>
+          Either way, one proof obligation holds: all schematic terminals on a
+          net belong to one extracted connected component unless the schematic
+          explicitly allows multiple. The certificate records which mode
+          certified each net.
+        </p>
+
+        <h3>C. No-short and resource exclusivity</h3>
+        <pre><code>x[n,e] + x[m,e'] &lt;= 1   for every conflict pair (e,e') with n != m</code></pre>
+        <p>
+          The conflict relation includes exact overlap, minimum spacing, EOL,
+          parallel-run-length spacing, cut spacing, enclosure, color conflicts,
+          forbidden via stacks, blockage spacing, and process-specific
+          exceptions. Same-net geometry is <em>not</em> automatically free:
+          same-net spacing, notch, hole, self-overlap, min-area, and antenna
+          predicates are still checked through <code>R</code>.
+        </p>
+
+        <h3>D. PDK rule predicates</h3>
+        <pre><code>R_i(Geometry, Context, T) = true   for every predicate R_i in R</code></pre>
+        <p>Predicates are callable at three granularities:</p>
+        <ol>
+          <li><strong>Local candidate check</strong> for access points and route edges.</li>
+          <li><strong>Incremental delta check</strong> after a commit or rip-up.</li>
+          <li><strong>Full final check</strong> before result acceptance.</li>
+        </ol>
+        <p>The rule oracle supports at least:</p>
+        <ul>
+          <li>manufacturing grid; layer allow/deny and preferred direction; min/max width;</li>
+          <li>min spacing with width / PRL / EOL dependencies; same-net spacing and notch;</li>
+          <li>minimum area and area-patch legality; via enclosure, cut size/spacing, via array, stacked-via;</li>
+          <li>density and fill-blocking windows; antenna and diode-repair hooks;</li>
+          <li>color/multipatterning compatibility, cut-mask assignment, stitch count, via decomposability, overlay length, mask balancing;</li>
+          <li>acute angle, hole, self-overlap, polygon topology; DFM/litho predicates (dummy fill, CMP planarity, slotting, post-OPC printability, process-window robustness);</li>
+          <li>high-voltage, guard-ring, well, substrate, and latch-up spacing when the PDK provides them.</li>
+        </ul>
+
+        <h3>E. LVS equivalence</h3>
+        <pre><code>X(Geometry, T) == S   under net and device equivalence</code></pre>
+        <p>
+          The minimum routing obligation is net connectivity: no opens, no
+          different-net shorts, no layout-only net geometry. For full analog
+          closure the certificate also records whether routing geometry changes
+          device recognition (accidental bridging of diffusion, well taps, guard
+          rings, or local interconnect).
+        </p>
+
+        <h3 id="parasitic">F. Parasitic objective</h3>
+        <p>For each net, incremental extraction estimates</p>
+        <pre><code>PEX(n) = (R_n, Cg_n, Cc_n, Rvia_n, L_n, EM_n, antenna_n)</code></pre>
+        <p>and the soft parasitic-damage objective is</p>
+        <pre><code>Phi_pex = sum_n alpha_n R_n + sum_n beta_n Cg_n + sum_(n,m) gamma_nm Cc_nm
+        + sum_n delta_n Rvia_n + sum_g eta_g mismatch_g
+        + sum_n theta_n EM_margin_penalty_n + sum_n kappa_n antenna_penalty_n</code></pre>
+        <p>
+          Weights are not universal constants — they come from circuit intent.
+          For an RF inductor shield coupling may dominate; for a bias net
+          leakage and shielding may dominate; for a digital control net
+          completion and low congestion may dominate.
+        </p>
+
+        <h3 id="in-loop">G. In-loop electrical signoff</h3>
+        <p>
+          The router evaluates three signoff classes <em>during</em> search, not
+          only at the end: <strong>geometry legality</strong> (DRC),
+          <strong>connectivity equivalence</strong> (opens, shorts, unintended
+          device/tap/well/guard-ring connectivity), and <strong>electrical
+          signoff</strong> (corner parasitics, coupling capacitance,
+          crosstalk/noise surrogates, static IR drop for power/ground, current
+          density, antenna, EM margin). These run on every meaningful commit so
+          repair localizes offending geometry before clean routes are disturbed.
+          If a needed corner, calibration file, or model class is unavailable,
+          the result is marked <strong>degraded-confidence</strong> rather than
+          silently treated as signoff-clean.
+        </p>
+
+        <h3 id="net-classes">H. Analog intent — the net-class obligation table</h3>
+        <p>
+          Intent is represented directly. The "Class" column is the default
+          <em>obligation class</em> the obligation takes; PDK or reliability
+          policy can promote a <code>Bounded</code> row to <code>Hard</code>.
+          The class column corresponds to Philis's
+          <code>philis::router::NetClass</code>.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Net class</th>
+              <th>Hard obligations</th>
+              <th>Bounded / soft obligations</th>
+              <th>Variables</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>Ordinary</td><td>access, connectivity, no-short, DRC</td><td>wirelength, via count</td><td><code>a, x, v, patch</code></td></tr>
+            <tr><td>Critical</td><td>access, connectivity, DRC; routed before ordinary</td><td>R, Cg, detour</td><td><code>a, x, v, w</code></td></tr>
+            <tr><td>Sensitive</td><td>access, connectivity, DRC; shield/spacing legality</td><td>coupling Cc, noise surrogate</td><td><code>x, sh, w</code></td></tr>
+            <tr><td>Differential pair</td><td>joint access, equal-topology, no-short</td><td>skew, Cc asymmetry, via/layer delta</td><td><code>a, x, v</code> (paired), <code>sh</code></td></tr>
+            <tr><td>Self/cross-symmetric</td><td>mirrored access, preserved axis, equivalent transitions</td><td>parasitic imbalance</td><td><code>a, x, v</code> (mirrored)</td></tr>
+            <tr><td>Matched array / common-centroid</td><td>joint escape, preserved centroid/interdigitation</td><td>equal per-layer length, neighborhood balance</td><td><code>a, x, v, w</code> (grouped)</td></tr>
+            <tr><td>Exact-match group</td><td>equal length / per-layer length / via count / topology</td><td>residual-delta minimization</td><td><code>x, v, patch</code> (grouped)</td></tr>
+            <tr><td>Power / ground</td><td>connectivity, no-short, domain separation; EM/IR when declared</td><td>wider trunks, multi-via, grid balance</td><td><code>x, v</code> (array), <code>w</code> (wide)</td></tr>
+            <tr><td>RF / mm-wave</td><td>shield continuity, return path, bounded bends/vias</td><td>line length, aggressor distance, density</td><td><code>x, v, sh, w</code></td></tr>
+            <tr><td>High-voltage</td><td>voltage-domain spacing, well isolation, thick-oxide markers</td><td>domain-separation margin</td><td><code>x, w</code> (HV spacing), <code>col</code></td></tr>
+            <tr><td>Guard ring / tap / substrate</td><td>required connectivity, low-impedance return, spacing</td><td>substrate-noise margin</td><td><code>x, v, sh</code></td></tr>
+          </tbody>
+        </table>
+        <p>
+          Matched groups, common-centroid arrays, and self-symmetric nets are
+          routed <strong>jointly</strong>. The repair loop preserves symmetry
+          axes, equalizes via count and layer transitions where required, and
+          bounds skew, parasitic imbalance, and coupling asymmetry. An individual
+          net may not be rerouted independently if doing so breaks its group
+          constraint — see the <a href="#group-invariant">group-preserving
+          invariant</a>.
+        </p>
+
+        <h2 id="hierarchy">3. The objective hierarchy</h2>
+        <p>
+          The setup is lexicographic. The four hard levels must each be satisfied
+          in order before any soft objective is compared:
+        </p>
+        <pre><code>Level 0: PDK validity and legal terminal access
+Level 1: DRC = 0
+Level 2: LVS = true
+Level 3: all required nets routed
+  ── then, inside the feasible region (Pareto / weighted) ──
+Soft 1: minimize parasitic damage (Phi_pex)
+Soft 2: minimize analog mismatch
+Soft 3: reduce wirelength, vias, density stress, runtime</code></pre>
+        <p>
+          The hard and soft vectors are exactly those on the
+          <a href="index.html#hierarchy">overview</a>. The hard vector is
+          <code>philis::router::HardVector</code>; the soft tail is the only part
+          that is weight-tunable.
+        </p>
+
+        <h2 id="pdk-compiler">4. The PDK rule compiler</h2>
+        <p>
+          The compiler is the process-portability layer. It maps foundry/open
+          PDK data into typed oracles: a layer/grid/via technology graph, a rule
+          oracle, a PEX/EM oracle, and the terminal-access oracle input. Its
+          output includes stable layer identifiers and classes (diffusion, local
+          interconnect, poly, contact, via, routing metal, thick metal, RDL,
+          well, implant, marker), per-domain grids, tracks and preferred
+          directions, via/array/enclosure/resistance/stacking rules, rule
+          predicates with their dependencies, electrical parameters, DFM/litho
+          surrogates, and external signoff adapters where available.
+        </p>
+
+        <h3 id="coverage">Rule coverage — the canonical vocabulary</h3>
+        <p>
+          Open and sparse PDKs are not merely lower-confidence; they contain
+          rules that are explicitly not coded, rules caught only by LVS, and
+          rules that must be manually reviewed before tapeout. Each predicate is
+          therefore classified by a canonical <em>coverage</em> enum
+          (<code>philis::router::Coverage</code>):
+        </p>
+        <pre><code>Coverage = Coded | Partial | Approximate | ExternalOnly | ManualReview
+         | RecommendedOnly | Unsupported | Missing | Contradictory</code></pre>
+        <p>
+          <code>ExternalOnly</code> carries an evidence domain (e.g.
+          <code>LVS</code>). The certificate reports rule coverage, not just DRC
+          pass/fail, so "internal evidence without required decks" reads as
+          <em>signoff-ready, not signoff-quality</em>.
+        </p>
+
+        <h3 id="pdk-states">The four PDK states</h3>
+        <p>
+          From the per-predicate coverage buckets plus structural sanity of
+          layers/tracks/vias, the compiler classifies the whole PDK
+          (<code>philis::router::PdkState</code>):
+        </p>
+        <table>
+          <thead>
+            <tr><th>PDK state</th><th>Dominant coverage profile</th><th>Router behavior</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>FullSignoff</code></td><td>all required classes <code>Coded</code>; no <code>ManualReview</code>/<code>Unsupported</code> gaps</td><td>Use exact rules and external final signoff.</td></tr>
+            <tr><td><code>AbstractComplete</code></td><td>required classes present, some <code>Partial</code>/<code>ExternalOnly</code></td><td>Use internal predicates; flag signoff confidence as abstract.</td></tr>
+            <tr><td><code>SparseResearch</code></td><td><code>Unsupported</code>/<code>ManualReview</code> dominate</td><td>Route only under known rules; return degraded-confidence certificate.</td></tr>
+            <tr><td><code>ContradictoryOrMissing</code></td><td><code>Contradictory</code>/<code>Missing</code> required classes, or broken structure</td><td>Refuse affected route classes; report unsatisfied PDK fields.</td></tr>
+          </tbody>
+        </table>
+        <p>
+          The classifier is deliberately conservative: a single
+          <code>Missing</code> required rule class or structural defect promotes
+          the whole PDK to <code>ContradictoryOrMissing</code>, and any
+          <code>Unsupported</code>/<code>ManualReview</code> rule prevents a
+          <code>FullSignoff</code> claim.
+        </p>
+
+        <h2 id="process-nodes">5. Process-node coverage</h2>
+        <p>
+          A process-portable router handles node families by changing the
+          compiled <code>T</code>, not by changing router code. It maintains
+          <em>feature</em> capabilities (color support, voltage domains, RF
+          shields, min-area patching, stacked vias, density repair, antenna
+          repair, external signoff) — never a "SKY130 router" / "ASAP7 router"
+          strategy matrix.
+        </p>
+        <table>
+          <thead>
+            <tr><th>Node family</th><th>Dominant risk</th><th>Required setup</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>350–130 nm planar CMOS</td><td>large analog devices, wide metals, guard rings, substrate/well</td><td>rich device pins, high-current power routing, guard-ring/tap constraints, conservative coupling windows</td></tr>
+            <tr><td>180–90 nm mixed-signal / BCD / HV</td><td>voltage-domain spacing, thick top metal, latch-up, isolation, ESD, markers</td><td>voltage-aware spacing, well/isolation layers, EM/current-density hard checks, marker preservation, ESD/latch-up constraints</td></tr>
+            <tr><td>65–45 nm planar CMOS</td><td>local interconnect, denser vias, restrictive min-area/spacing</td><td>accurate access, min-area patch synthesis, width/PRL/EOL rules</td></tr>
+            <tr><td>28–16 nm FinFET</td><td>unidirectional lower metals, restricted pin access, color, cut masks, via decomposability</td><td>directional graph, mask/color variables, cut-mask constraints, stitch limits, track-phase-aware access</td></tr>
+            <tr><td>7 nm and below</td><td>MOL/BEOL complexity, EUV / multipatterning, restrictive vias, density, OPC/CMP</td><td>pattern-aware rule oracle, via-option ranking, density windows, OPC/CMP/printability surrogates, external decks</td></tr>
+            <tr><td>RF / mm-wave variants</td><td>coupling, Q degradation, shield continuity, thick metal, symmetry</td><td>field-aware/calibrated PEX, shield constraints, bend/via restrictions, topology templates</td></tr>
+            <tr><td>RDL / pad / package-facing</td><td>wide metal, slots, density, antenna, pad connectivity</td><td>region-specific layer classes, width/slotting predicates, package pin models</td></tr>
+          </tbody>
+        </table>
+
+        <h2 id="access-oracle">6. The terminal access oracle</h2>
+        <p>
+          Terminal access is a first-class subproblem — a path search cannot
+          repair a missing legal access point. For each terminal the oracle
+          returns a ranked set <code>A_t = { candidate(t,k) }</code>. Each
+          candidate records terminal/instance identity; pin shape, multiport
+          option, or heuristic anchor; layer and legal via stack; on-grid point
+          or legal access patch; a local DRC proof; expected parasitic access
+          cost; symmetry/matching class; role, orientation, access priority,
+          equivalence class; and a <strong>confidence level</strong>
+          (<code>philis::router::AccessConfidence</code>):
+        </p>
+        <pre><code>AccessConfidence = ExactPin | GeneratedPin | InferredPin | HeuristicPin</code></pre>
+        <p>Candidate ranking is stable and multi-objective:</p>
+        <ol>
+          <li>exact legal pin access before heuristic access;</li>
+          <li>no-via or fewer-via access before stacked-via access;</li>
+          <li>lower local DRC margin risk before tighter local margin;</li>
+          <li>lower parasitic access cost before longer access;</li>
+          <li>symmetric counterpart availability before isolated candidate quality.</li>
+        </ol>
+        <p>
+          Each generated device exposes a set of <strong>multiport</strong>
+          terminal candidates with role, orientation, layer stack, access region,
+          equivalence class, and priority. Dot-model pins are a
+          degraded-confidence fallback only: the default analog model represents
+          multiple electrically equivalent access locations, often distributed
+          over different fabrication layers. If placement does not expose
+          orientation or exact pin geometry, the router may create heuristic
+          anchors, but the certificate marks those nets as heuristic-access — not
+          a signoff-quality answer until verified by exact device geometry.
+        </p>
+
+        <h2 id="search-repair">7. Search and repair</h2>
+        <p>The routing loop is conflict-directed, not purely shortest-path:</p>
+        <pre><code>BuildProblem ─▶ AccessAnalysis ─▶ InitialRoute ─▶ Verify
+  Verify ─[DRC=0 ∧ LVS=true ∧ PEX in target]─▶ Accept ─▶ done
+  Verify ─[violation / open / short / PEX outlier]─▶ Diagnose
+    Diagnose ─[no legal access ∨ unsat hard rules]─▶ Infeasible ─▶ done
+    Diagnose ─▶ RipupScope: group-preserving closure scope(V)
+      RipupScope ─[budget exhausted]─▶ Timeout: return best verified ─▶ done
+      RipupScope ─▶ Reroute: exact-local + negotiated + maze ─▶ Verify</code></pre>
+        <p>A strong implementation combines three engines (full derivations on the <a href="Router-Algorithms.html">Algorithms</a> page):</p>
+        <ol>
+          <li><strong>Exact local feasibility</strong> — SAT/SMT/ILP or exhaustive enumeration for small pin-access, via, color, min-area, and local conflict problems.</li>
+          <li><strong>Negotiated global congestion</strong> — PathFinder-style present and history costs for routability and channel pressure.</li>
+          <li><strong>Detailed A*/maze repair</strong> — rule-oracle costs, DRC markers, and PEX outliers to repair only implicated nets or clips.</li>
+        </ol>
+
+        <h3 id="diagnosis">Failure diagnosis classes</h3>
+        <p>
+          Every failure is classified — this is
+          <code>philis::router::RouteDiagnostic</code>. Each class requires a
+          different repair scope; an EOL violation near a via must not rip up a
+          whole differential pair unless the local clip cannot be repaired while
+          preserving pair symmetry.
+        </p>
+        <ul>
+          <li>no legal terminal access;</li>
+          <li>disconnected same-net component; different-net short;</li>
+          <li>DRC predicate violation;</li>
+          <li>color / cut-mask / stitch / via non-decomposability;</li>
+          <li>antenna or EM hard violation; IR-drop or current-density hard violation;</li>
+          <li>crosstalk/noise or coupling bound violation; PEX bound violation;</li>
+          <li>impossible analog constraint; PDK contradiction or missing rule data;</li>
+          <li>timeout without proof.</li>
+        </ul>
+        <p>
+          Each diagnosis also classifies <strong>scope</strong>: local
+          repairable, global infeasibility, or unproven timeout. Repairable cases
+          emit the smallest implicated net region and the exact failed predicate
+          set; infeasible cases preserve the unsatisfied core / minimized
+          conflict set rather than reporting "routing failed".
+        </p>
+
+        <h3 id="ripup">Rip-up scope minimization</h3>
+        <p>
+          Repair quality is governed by <em>what gets torn up</em>. Let
+          <code>V</code> be the violation markers, <code>imp(v)</code> the
+          resource edges implicated by marker <code>v</code>, <code>owner(e)</code>
+          the net on edge <code>e</code>, and <code>grp(n)</code> the
+          group-preserving closure of net <code>n</code>. The minimal rip-up
+          scope is:
+        </p>
+        <pre><code>seed(V)  = { owner(e) : e in imp(v), v in V }
+scope(V) = closure over grp(.) of seed(V)</code></pre>
+        <p>
+          i.e. the <em>smallest</em> net set that (a) covers every implicated
+          edge and (b) is closed under the group relation. Nets outside
+          <code>scope(V)</code> are invariant across the repair step — the formal
+          statement of "preserve unrelated clean geometry". Because
+          <code>scope(V)</code> is a function only of committed state and the
+          group relation, the selection is deterministic and replayable.
+        </p>
+
+        <h3 id="group-invariant">The group-preserving repair invariant</h3>
+        <p>
+          Joint structures (differential pairs, self-symmetric nets,
+          common-centroid/interdigitated arrays, shield pairs) are protected by an
+          <em>invariant</em>, not a soft penalty:
+        </p>
+        <pre><code>INV_group: for every group g and every repair step,
+  either all nets of g are simultaneously in scope(V) and rerouted under the
+  group's joint objective, or none of g is rerouted.</code></pre>
+        <p>
+          The joint reroute preserves the group's geometric predicate (axis
+          mirroring, equal per-layer length, equal via count, bounded
+          skew/coupling asymmetry) as a hard local constraint solved by the exact
+          engine. The certificate records, per group, the satisfied predicate and
+          its residual deltas (<code>max_diff_pair_skew_nm</code>,
+          <code>max_length_match_delta_nm</code>).
+        </p>
+
+        <h3 id="convergence">Convergence, termination, determinism</h3>
+        <ul>
+          <li>
+            <strong>Monotone history cost.</strong> Each resource carries a
+            present cost <code>p(e)</code> and a non-decreasing history cost
+            <code>h(e) ← h(e) + k·overflow(e)</code>, <code>k &gt; 0</code>. A
+            resource contested in the past stays expensive, asymmetrizing future
+            tie-breaks and breaking the symmetric eviction cycle that causes
+            oscillation.
+          </li>
+          <li>
+            <strong>Bounded budgets.</strong> <code>RouteBudgets</code>
+            (<code>max_iterations</code>, <code>max_repair_passes</code>,
+            <code>max_runtime_ms</code>) caps the loop, so termination is
+            unconditional.
+          </li>
+          <li>
+            <strong>Best-verified retention.</strong> The loop keeps the
+            lexicographically best verified state; on budget exhaustion it returns
+            that state with unproven conditions explicitly marked — a timeout is a
+            <em>diagnosed</em> outcome, never a silent bad route.
+          </li>
+          <li>
+            <strong>Determinism.</strong> Fixed net-family order, sorted/deduped
+            rip-up scopes, segments/vias sorted by <code>(net, layer, coords)</code>
+            before output, and fixed-order diagnostics. Any optional randomized
+            net-order perturbation records its seed in the certificate, so even a
+            randomized run is bit-reproducible.
+          </li>
+        </ul>
+
+        <h3 id="soundness">Incremental DRC delta soundness</h3>
+        <p>
+          An incremental delta is sound only if it can never miss a violation a
+          full check would catch. Every PDK predicate has a finite spatial
+          influence radius <code>r_max</code> (max of its width, spacing, PRL,
+          EOL, enclosure, density-window extents). When a commit changes geometry
+          inside region <code>Q</code>, the delta re-evaluates all predicates over
+          the dilation of <code>Q</code> by <code>r_max</code>, which provably
+          contains every shape whose legality could have changed. Predicates with
+          unbounded/context-global influence (large density windows, antenna
+          accumulation along a full net) are flagged <em>not delta-safe</em> and
+          re-run at tile/net scope. The certificate records which predicates were
+          proven at clip vs. tile/net scope, so the soundness boundary is
+          auditable.
+        </p>
+        <p>
+          Complexity: terminal access <code>O(T·K)</code> with <code>O(K)</code>
+          local checks each; initial route <code>O(N·|E_R|·log|E_R|)</code>;
+          incremental verification scoped to the committed clip
+          (<code>O(m)</code> DRC-delta for an <code>m</code>-edge commit plus
+          near-constant union-find connectivity). The exact ILP/SMT engine is
+          invoked only on small clips, so its cost is bounded by clip size, not
+          by <code>N</code>.
+        </p>
+
+        <h2 id="taxonomy">8. Case taxonomy</h2>
+        <p>The router classifies every input and has a required response per case:</p>
+        <table>
+          <thead><tr><th>Case</th><th>Required response</th></tr></thead>
+          <tbody>
+            <tr><td>Full PDK, exact pins, feasible channels</td><td>Emit DRC-clean, LVS-true, PEX-optimized geometry + certificate.</td></tr>
+            <tr><td>Full PDK, exact pins, no feasible route</td><td>Emit no geometry for affected nets; return unsat diagnosis with blocking rules/terminals.</td></tr>
+            <tr><td>Sparse PDK</td><td>Route under known rules only; mark confidence degraded; list missing rule classes.</td></tr>
+            <tr><td>Missing via rule</td><td>Do not invent transitions; route within connected layer components or report impossible nets.</td></tr>
+            <tr><td>Missing tracks, known layers</td><td>Synthesize fallback grid for exploration only; mark non-signoff confidence.</td></tr>
+            <tr><td>Heuristic device pins</td><td>Route with heuristic-access warning; require exact-pin verification before signoff acceptance.</td></tr>
+            <tr><td>Differential pair</td><td>Joint objective + symmetric repair scope; reject routes that satisfy each net separately but break pair constraints.</td></tr>
+            <tr><td>Shielded sensitive net</td><td>Reserve/route shield geometry; if impossible, report unsupported/infeasible shielding intent.</td></tr>
+            <tr><td>Power / ground</td><td>EM-aware width/via choices, special trunks; check shorts and domain separation.</td></tr>
+            <tr><td>High-voltage net</td><td>Apply voltage-domain spacing and isolation as hard predicates.</td></tr>
+            <tr><td>RF / transmission line</td><td>Topology templates, controlled bends/vias, shield continuity, calibrated field-aware extraction.</td></tr>
+            <tr><td>Common-centroid / matched array</td><td>Joint grouped escapes; preserve axis, equal via/layer transitions, parasitic balance.</td></tr>
+            <tr><td>Color / via non-decomposable route</td><td>Reject or repair via color/cut-mask/stitch changes; do not hide as ordinary DRC.</td></tr>
+            <tr><td>Congested but repairable channel</td><td>Negotiated congestion + DRC-marker history; converge without destroying clean nets.</td></tr>
+            <tr><td>PEX outlier, clean DRC/LVS</td><td>Repair within feasible region; preserve hard gates while reducing PEX damage.</td></tr>
+            <tr><td>Contradictory constraints</td><td>Report minimal conflicting constraint set; do not silently drop intent.</td></tr>
+            <tr><td>Timeout</td><td>Return best verified certificate state; explicitly mark unproven conditions.</td></tr>
+          </tbody>
+        </table>
+
+        <h2 id="certificate">9. The route certificate</h2>
+        <p>
+          The router returns geometry <strong>plus</strong> a certificate — the
+          difference between "the router produced shapes" and "the router produced
+          an auditable layout result". In Philis this is
+          <code>philis::router::RouteCertificate</code> (see
+          <a href="Api-Mapping.html">API Mapping</a>). It contains:
+        </p>
+        <ul>
+          <li>route problem hash; PDK rule-oracle hash and signoff deck versions where available;</li>
+          <li>selected terminal access candidates and confidence levels;</li>
+          <li>route topology per net; generated shapes, patches, shields, vias, derived fill blockers;</li>
+          <li>connectivity proof or extracted graph;</li>
+          <li>DRC report (internal proof or external report path/hash);</li>
+          <li>LVS report and schematic mapping;</li>
+          <li>PEX canonical graph and reduced per-net parasitics;</li>
+          <li>IR drop, EM, antenna, crosstalk/noise evidence when applicable;</li>
+          <li>rule-coverage report in the canonical <a href="#coverage">Coverage</a> vocabulary;</li>
+          <li>analog constraint-satisfaction report; warnings and unsupported assumptions;</li>
+          <li>infeasible cores for failed nets.</li>
+        </ul>
+        <p>
+          The certificate distinguishes <strong>evidence classes</strong>. For
+          each hard gate it carries one of three proof forms: an internal proof
+          artifact, an external signoff report hash, or a solver counterexample
+          record. A failing candidate stores the violating predicate IDs, the
+          geometry/net identifiers, and the minimal reroute scope to reproduce
+          the failure. A proven-infeasible problem preserves the unsatisfied core,
+          so the result is not "the router failed" but "these predicates, shapes,
+          and terminals are jointly inconsistent under this PDK, placement, and
+          intent graph".
+        </p>
+
+        <p style="margin-top:2rem">
+          Next: <a href="Router-Algorithms.html">Algorithms &amp; Foundations</a>
+          derives every mechanism named above; <a href="Api-Mapping.html">API
+          Mapping &amp; Stubs</a> ties each symbol to a Philis type and its
+          implementation status.
+        </p>
+      </main>
+    </div>
+
+    <footer class="site-footer">Philis &middot; Analog Layout Engine</footer>
+      <script src="../../nav.js"></script>
+  </body>
+</html>

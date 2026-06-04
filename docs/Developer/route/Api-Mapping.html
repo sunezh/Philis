@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Router API Mapping &amp; Stubs — Philis</title>
+    <link rel="stylesheet" href="../../style.css" />
+    <link rel="icon" type="image/svg+xml" href="../../brand.svg" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../../index.html">
+        <img src="../../brand.svg" alt="Philis" />
+        Philis
+      </a>
+      <nav class="top-nav">
+        <a href="../../index.html">Home</a>
+        <a href="../../Usage/getting-started.html">Usage</a>
+        <a href="../api/index.html" class="active">Developer</a>
+        <a href="https://github.com/OmarSiwy/Philis">GitHub</a>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <h4>Developer</h4>
+        <ul>
+          <li><a href="../api/index.html">API</a></li>
+          <li><a href="../geom/index.html">Geometry</a></li>
+          <li><a href="../tech/index.html">Technology</a></li>
+          <li><a href="../verify/index.html">Verify</a></li>
+          <li><a href="../solver/index.html">Solver</a></li>
+          <li><a href="../place/index.html">Place</a></li>
+          <li>
+            <a href="../route/index.html" class="active">Route</a>
+          </li>
+          <li><a href="../constraints/index.html">Constraints</a></li>
+        </ul>
+        <h4>Route</h4>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="Signoff-First-Routing.html">Signoff-First Routing</a></li>
+          <li><a href="Router-Algorithms.html">Router Algorithms</a></li>
+          <li><a href="Api-Mapping.html" class="active">API Mapping</a></li>
+        </ul>
+        <h4>Usage</h4>
+        <ul>
+          <li>
+            <a href="../../Usage/getting-started.html">Getting Started</a>
+          </li>
+          <li><a href="../../Usage/installation.html">Installation</a></li>
+        </ul>
+      </aside>
+
+      <main class="content">
+        <p class="breadcrumb">
+          <a href="../../index.html">Home</a> / Developer / Route /
+          API Mapping &amp; Stubs
+        </p>
+
+        <h1>Router API Mapping &amp; Stubs</h1>
+        <p>
+          This page ties the <a href="Signoff-First-Routing.html">signoff-first
+          formulation</a> to the concrete Philis surface — the <code>philis</code>
+          crate (<a href="https://github.com/OmarSiwy/Philis/tree/main/crates/api"><code>crates/api</code></a>)
+          — and states precisely what is real today versus a documented stub.
+          The honesty rule from the
+          <a href="../api/General-API-Design.html">API design rules</a> applies
+          verbatim: the one defect the design forbids is an API that
+          <strong>accepts input it silently discards</strong>. Every stub below
+          is shape-real and behavior-placeholder, and a stub result is marked
+          <code>degraded_confidence</code> rather than passed off as signoff.
+        </p>
+
+        <div class="note">
+          <strong>Where the router lives.</strong> Philis ships a single real
+          crate, <code>crates/api</code> (package <code>philis</code>); the
+          would-be <code>crates/route</code>, <code>crates/place</code>, and
+          <code>crates/constraints</code> are empty scaffolds not yet in the
+          workspace. The router therefore lives <em>inside</em> the façade: the
+          typed contract is the module
+          <a href="https://github.com/OmarSiwy/Philis/blob/main/crates/api/src/core.rs"><code>crates/api/src/core.rs</code></a>,
+          the stage oracle is <code>core::run_routing</code>, and the whole
+          vocabulary is re-exported under the <code>philis::router</code>
+          namespace (mirroring the eventual split into separate engine crates).
+        </div>
+
+        <hr />
+
+        <h2>1. The typed contract</h2>
+        <p>
+          The formulation's public interface is geometry <em>plus</em> a
+          certificate. In Philis:
+        </p>
+        <pre><code>// the paper's RouteProblem / RouteSolution, as Philis types
+
+RoutingRunInput   // the (stub) route problem fed to the oracle
+RoutingResult     // Philis's RouteSolution: geometry + certificate + quality + diagnostics
+   ├─ routed_segments : usize          // geometry summary
+   ├─ quality         : RouteQuality   // signoff/parasitic facts, reported directly
+   ├─ certificate     : RouteCertificate
+   └─ diagnostics     : Vec&lt;RouteDiagnostic&gt;</code></pre>
+        <p>Each formulation symbol maps to a concrete type:</p>
+        <table>
+          <thead>
+            <tr><th>Formulation concept</th><th>Philis type (<code>philis::router::*</code>)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Lexicographic hard vector (§3)</td><td><code>HardVector</code> — <code>is_feasible()</code>, <code>as_priority()</code>, <code>lex_le()</code></td></tr>
+            <tr><td>Canonical rule coverage (§4)</td><td><code>Coverage</code> + <code>RuleCoverageReport</code> (legacy-named buckets + <code>as_map()</code>)</td></tr>
+            <tr><td>PDK readiness state (§4)</td><td><code>PdkState</code> { <code>FullSignoff</code>, <code>AbstractComplete</code>, <code>SparseResearch</code>, <code>ContradictoryOrMissing</code> }</td></tr>
+            <tr><td>Analog net class (§2.H)</td><td><code>NetClass</code> — <code>is_grouped()</code> marks joint-reroute classes</td></tr>
+            <tr><td>Access confidence (§6)</td><td><code>AccessConfidence</code> { <code>ExactPin</code> … <code>HeuristicPin</code> }</td></tr>
+            <tr><td>Hard-gate proof form (§9)</td><td><code>Evidence</code> { <code>InternalProof</code>, <code>ExternalReport</code>, <code>Counterexample</code> }</td></tr>
+            <tr><td>Failure diagnosis classes (§7)</td><td><code>RouteDiagnostic</code> + <code>DiagnosticClass</code> + <code>DiagnosticScope</code></td></tr>
+            <tr><td>Route certificate (§9)</td><td><code>RouteCertificate</code> — <code>is_signoff_clean()</code>, <code>stub()</code></td></tr>
+            <tr><td>Signoff/parasitic facts (§2.F/G)</td><td><code>RouteQuality</code> (the paper's quality struct, field-for-field)</td></tr>
+          </tbody>
+        </table>
+
+        <h3>The hard vector is the spine</h3>
+        <p>
+          <code>HardVector</code> is the lexicographic acceptance relation made
+          executable. <code>as_priority()</code> returns the six components in
+          gate order, and <code>lex_le()</code> compares two candidates so the
+          search loop can keep the lexicographically best verified state. This is
+          the structural alternative to a scalar penalty: a nonzero hard
+          component is a different feasibility class, and no soft improvement can
+          reorder two candidates whose hard vectors differ.
+        </p>
+        <pre><code>let clean = HardVector::default();          // feasible
+assert!(clean.is_feasible());
+
+let drc_fail = HardVector { drc_violations: 1, ..Default::default() };
+assert!(clean.lex_le(&amp;drc_fail));            // clean ranks ahead
+assert!(!drc_fail.is_feasible());            // a different feasibility class</code></pre>
+
+        <h3>The certificate is auditable, not anecdotal</h3>
+        <pre><code>let result = philis::router::run_routing(&amp;input);
+let cert = &amp;result.certificate;
+
+cert.hard.is_feasible();      // are all hard levels met?
+cert.is_signoff_clean();      // feasible AND not degraded-confidence?
+cert.pdk_state;               // which PDK readiness state?
+cert.coverage.count(Coverage::ExternalOnly);  // LVS-only + signoff-only rules
+cert.infeasible_core;         // preserved unsat core on failure</code></pre>
+
+        <h2>2. Where intent comes from</h2>
+        <p>
+          The router consumes intent, it does not rediscover it from geometry. In
+          Philis the <a href="../constraints/index.html">constraint taxonomy</a>
+          (<code>philis::Constraint</code>) is the source: its analog-aware
+          variants (<code>Symmetric</code>, <code>Matching</code>,
+          <code>SelfSymmetric</code>, <code>SymmetricGroup</code>,
+          <code>GuardRing</code>, <code>NetShield</code>,
+          <code>SetNetClass</code>, …) lower into the formulation's
+          <em>IntentGraph</em> and its <code>NetClass</code>/group relations:
+        </p>
+        <table>
+          <thead><tr><th><code>Constraint</code> variant</th><th>Lowers to</th></tr></thead>
+          <tbody>
+            <tr><td><code>SetNetClass</code></td><td><code>NetClass</code> on the named net</td></tr>
+            <tr><td><code>Symmetric</code> / <code>SymmetricGroup</code> / <code>SelfSymmetric</code></td><td><code>NetClass::DifferentialPair</code> / <code>SelfSymmetric</code> + the group-preserving closure <code>grp(.)</code></td></tr>
+            <tr><td><code>Matching</code></td><td><code>NetClass::MatchedArray</code> / <code>ExactMatch</code> + matched-group rip-up closure</td></tr>
+            <tr><td><code>NetShield</code></td><td>shield reservation (<code>sh[n,e]</code>) for a <code>Sensitive</code>/<code>RfMmwave</code> net</td></tr>
+            <tr><td><code>GuardRing</code></td><td><code>NetClass::GuardSubstrate</code> connectivity + spacing obligations</td></tr>
+          </tbody>
+        </table>
+        <p>
+          Constraint variants the engine cannot yet honor are surfaced as
+          <code>BuildWarning::UnsupportedConstraint(kind)</code> at build time —
+          never dropped silently. That is the same honesty contract this page
+          enforces for the router.
+        </p>
+
+        <h2>3. The verification seam</h2>
+        <p>
+          The formulation's <a href="Signoff-First-Routing.html#in-loop">in-loop
+          signoff</a> (DRC / LVS / PEX / ERC) maps onto
+          <code>philis::verify::{drc, lvs, pex, erc}</code> and the
+          <code>Layout::{drc, lvs, pex, erc}</code> methods. The tiered flow lets
+          these run at <em>any</em> point — on a manual tier against the
+          incrementally-built GDS, or on the automation result in memory — which
+          is exactly the "checks are callable during candidate generation and
+          repair" property §2.G requires. The certificate's
+          <code>drc_evidence</code> / <code>lvs_evidence</code> fields are where a
+          run records <em>which</em> form of proof (internal, external report
+          hash, or counterexample) backs each gate.
+        </p>
+
+        <h2>4. Stub ledger (router slice)</h2>
+        <p>
+          Legend: ✅ real · 🟡 partial · 🔲 stub (shape real, behavior
+          placeholder). This is the routing-specific view of
+          <a href="https://github.com/OmarSiwy/Philis/blob/main/crates/api/STUBS.md"><code>crates/api/STUBS.md</code></a>.
+        </p>
+        <table>
+          <thead><tr><th>Item</th><th>Status</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td><code>core.rs</code> routing-contract types</td><td>✅</td><td>The full typed vocabulary (certificate, quality, hard vector, coverage, net class, diagnostics, evidence) is real and unit-tested.</td></tr>
+            <tr><td><code>HardVector</code> lexicographic ordering</td><td>✅</td><td><code>is_feasible</code>/<code>as_priority</code>/<code>lex_le</code> implement the acceptance relation.</td></tr>
+            <tr><td><code>run_routing</code></td><td>🔲</td><td>Emits no geometry (<code>routed_segments = 0</code>) and the honest <code>RouteCertificate::stub()</code> (feasible-shaped, <code>degraded_confidence = true</code>). No search, extraction, or verification runs.</td></tr>
+            <tr><td>PDK rule compiler &amp; coverage classification</td><td>🔲</td><td>Types exist (<code>Coverage</code>, <code>PdkState</code>, <code>RuleCoverageReport</code>); the compiler that classifies a real PDK is future work. Stub state is the conservative <code>SparseResearch</code>.</td></tr>
+            <tr><td>Terminal access oracle</td><td>🔲</td><td><code>AccessConfidence</code> exists; candidate generation/ranking is unimplemented. Stub access defaults to <code>HeuristicPin</code>.</td></tr>
+            <tr><td>Three-engine search &amp; repair</td><td>🔲</td><td>Diagnosis classes (<code>RouteDiagnostic</code>) and scope (<code>DiagnosticScope</code>) exist; the exact-local / negotiated / maze engines are not yet implemented.</td></tr>
+            <tr><td>In-loop electrical (PEX/IR/EM/noise)</td><td>🔲</td><td><code>RouteQuality</code> carries every field; <code>verify::pex</code> returns clean. No extraction yet.</td></tr>
+            <tr><td><code>verify::{drc,lvs,pex,erc}</code></td><td>🔲</td><td>Real harness, report shape, and call sites; rule decks return clean.</td></tr>
+            <tr><td>Certificate evidence &amp; infeasible cores</td><td>🟡</td><td>Shapes are real (<code>Evidence</code>, <code>infeasible_core</code>); they are populated trivially by the stub.</td></tr>
+          </tbody>
+        </table>
+
+        <h2>5. Roadmap to de-stub the router</h2>
+        <ol>
+          <li>Compile a real PDK into <code>Coverage</code>/<code>PdkState</code> and a rule oracle; promote <code>FullSignoff</code>/<code>AbstractComplete</code> only when evidence supports it.</li>
+          <li>Build the terminal-access oracle (§6) and fail fast with <code>DiagnosticClass::NoLegalAccess</code> when a required terminal has no candidate.</li>
+          <li>Implement the DRC-clean single-net router (exact-local engine), then the multi-net conflict graph and no-short constraints.</li>
+          <li>Add LVS connectivity extraction in the loop (the route-state invariant of §2.B), recording the certifying mode per net.</li>
+          <li>Add incremental PEX/IR/EM/noise scoring into <code>RouteQuality</code> and feed outliers back into repair.</li>
+          <li>Add group routing for symmetry/matching/shielding (the group-preserving invariant), populating <code>max_diff_pair_skew_nm</code> / <code>max_length_match_delta_nm</code>.</li>
+          <li>Add color/cut-mask/via-decomposition classes where PDK data supports them.</li>
+          <li>Populate real <code>Evidence</code> and minimized <code>infeasible_core</code>s, then flip each row above and drop the <code>degraded_confidence</code> stub marker.</li>
+        </ol>
+        <p>
+          Each step closes a row in the ledger and removes a degraded-confidence
+          marker — never a silently-ignored input. The hard vector and the
+          certificate shape do not change as the engine lands; only their
+          <em>contents</em> graduate from stub to proven.
+        </p>
+      </main>
+    </div>
+
+    <footer class="site-footer">Philis &middot; Analog Layout Engine</footer>
+      <script src="../../nav.js"></script>
+  </body>
+</html>

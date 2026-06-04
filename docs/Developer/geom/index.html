@@ -1,0 +1,753 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Geometry Kernel — Philis</title>
+    <link rel="stylesheet" href="../../style.css" />
+    <link rel="icon" type="image/svg+xml" href="../../brand.svg" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../../index.html">
+        <img src="../../brand.svg" alt="Philis" />
+        Philis
+      </a>
+      <nav class="top-nav">
+        <a href="../../index.html">Home</a>
+        <a href="../../Usage/getting-started.html">Usage</a>
+        <a href="../api/index.html" class="active">Developer</a>
+        <a href="https://github.com/OmarSiwy/Philis">GitHub</a>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <h4>Developer</h4>
+        <ul>
+          <li><a href="../api/index.html">API</a></li>
+          <li>
+            <a href="../geom/index.html" class="active">Geometry</a>
+          </li>
+          <li><a href="../tech/index.html">Technology</a></li>
+          <li><a href="../verify/index.html">Verify</a></li>
+          <li><a href="../solver/index.html">Solver</a></li>
+          <li><a href="../place/index.html">Place</a></li>
+          <li><a href="../route/index.html">Route</a></li>
+          <li><a href="../constraints/index.html">Constraints</a></li>
+        </ul>
+        <h4>Geometry</h4>
+        <ul>
+          <li><a href="index.html" class="active">Overview</a></li>
+        </ul>
+        <h4>Usage</h4>
+        <ul>
+          <li>
+            <a href="../../Usage/getting-started.html">Getting Started</a>
+          </li>
+          <li><a href="../../Usage/installation.html">Installation</a></li>
+        </ul>
+      </aside>
+
+      <main class="content">
+        <p class="breadcrumb">
+          <a href="../../index.html">Home</a> / Developer / Geometry Kernel
+        </p>
+
+        <h1>The Philis Geometry Kernel</h1>
+        <p>
+          <strong>Status:</strong> design reference. This section specifies the
+          shared integer geometry kernel implemented in
+          <code>crates/geom</code> (<code>philis-geom</code>). The crate is a
+          dependency-free leaf of the workspace graph: both
+          <a href="../place/index.html"><code>crates/place</code></a> and
+          <a href="../route/index.html"><code>crates/route</code></a> depend on
+          it, and <a href="../constraints/index.html"><code>crates/constraints</code></a>
+          may consume it for geometric predicates. See the
+          <a href="https://github.com/OmarSiwy/Philis/blob/main/crates/geom/PLAN.md"
+            >implementation plan</a>
+          for build phases and method signatures.
+        </p>
+
+        <blockquote>
+          <p>
+            <strong>The one-sentence thesis.</strong> Every shape, spatial
+            query, boolean operation, and orientation transform in the Philis
+            engine passes through one crate, using one coordinate system
+            (<code>i64</code> nanometers), with one set of invariants. There is
+            no second geometry library.
+          </p>
+        </blockquote>
+
+        <h2 id="why-shared">Why a shared geometry kernel?</h2>
+        <p>
+          The placement engine and the routing engine both need axis-aligned
+          rectangles, rectilinear polygons, spatial indices, boolean operations,
+          and orientation transforms. Without a shared kernel, each crate
+          builds its own — with its own conventions for winding order,
+          containment semantics, degenerate-shape handling, and coordinate
+          representation. The result is subtle bugs at the boundary: a
+          rectangle that placement considers "touching" is "overlapping" to the
+          router, or an orientation transform that placement applies about the
+          bbox center while the router applies about the origin.
+        </p>
+        <p>
+          Extracting the kernel into <code>crates/geom</code> eliminates this
+          class of bugs structurally. Both consumers operate on the same
+          <code>Rect</code>, the same <code>RectiPoly</code>, the same
+          <code>Orientation</code> enum, and the same
+          <code>GeometryStore</code>. A containment check in the placement
+          DRC oracle uses exactly the same code path as a containment check
+          in the routing DRC engine.
+        </p>
+
+        <h2 id="coordinates">The <code>i64</code> coordinate decision</h2>
+        <p>
+          All geometry in the kernel uses <code>i64</code> nanometers. There
+          is no <code>f64</code> anywhere in the crate. This is a deliberate
+          restriction with three justifications:
+        </p>
+        <ol>
+          <li>
+            <strong>Exact arithmetic.</strong> Integer coordinates make
+            equality, containment, and intersection tests exact. There are no
+            epsilon comparisons, no tolerance parameters, no
+            <code>nearly_equal</code> helpers. Two points are equal iff their
+            coordinates are equal. Two rectangles overlap iff their intervals
+            overlap. These are bit-exact predicates that compose transitively
+            — if <code>a == b</code> and <code>b == c</code>, then
+            <code>a == c</code>. Floating-point arithmetic does not guarantee
+            this.
+          </li>
+          <li>
+            <strong>No degenerate topology.</strong> Floating-point snap can
+            produce degenerate polygons: zero-area slivers, self-intersecting
+            edges, vertices that are "almost" collinear. These degeneracies
+            propagate through boolean operations and spatial queries, producing
+            corrupt geometry that is difficult to diagnose. Integer coordinates
+            on a fixed grid cannot produce these degeneracies — every vertex
+            is on-grid by construction.
+          </li>
+          <li>
+            <strong>Determinism.</strong> Integer arithmetic is deterministic
+            across platforms, compilers, and optimization levels. The same
+            input always produces the same output, bit-for-bit. This is
+            required for the certificate replay guarantee: given the same
+            inputs, the engine must produce the same geometry, which must
+            produce the same DRC results, which must produce the same
+            certificate.
+          </li>
+        </ol>
+        <div class="note">
+          <strong>Range.</strong> An <code>i64</code> nanometer coordinate can
+          represent positions up to approximately +/- 9.2 billion meters. IC
+          die sizes are on the order of millimeters (10<sup>6</sup> nm). Overflow
+          is not a practical concern. The only operation that can approach the
+          <code>i64</code> boundary is <code>area()</code> on a very large
+          rectangle (width * height), which the implementation guards with
+          widening multiplication to <code>i128</code>.
+        </div>
+        <p>
+          The technology compiler (<code>crates/tech</code>) provides a
+          <code>db_unit_nm</code> conversion factor for translating between
+          internal nanometer coordinates and GDS database units at I/O time.
+          All computation stays in nanometers; GDS conversion happens only at
+          the read/write boundary.
+        </p>
+
+        <h2 id="shapes">Shape types</h2>
+
+        <h3>Rect — axis-aligned rectangle</h3>
+        <p>
+          The core shape. Axis-aligned, closed (boundary included),
+          non-degenerate (<code>x_lo &lt; x_hi</code>,
+          <code>y_lo &lt; y_hi</code>). This is the 95% shape in analog layout
+          — every wire segment, every device bounding box, every DRC check
+          region is a <code>Rect</code>.
+        </p>
+        <pre><code>pub struct Rect {
+    pub x_lo: i64,    // left edge (nm)
+    pub y_lo: i64,    // bottom edge (nm)
+    pub x_hi: i64,    // right edge (nm)
+    pub y_hi: i64,    // top edge (nm)
+}
+
+impl Rect {
+    pub fn new(x_lo: i64, y_lo: i64, x_hi: i64, y_hi: i64) -> Self;
+    pub fn width(&self) -> i64;
+    pub fn height(&self) -> i64;
+    pub fn area(&self) -> i64;
+    pub fn center(&self) -> Point;
+
+    pub fn contains_point(&self, p: Point) -> bool;
+    pub fn contains_rect(&self, other: &Rect) -> bool;
+    pub fn overlaps(&self, other: &Rect) -> bool;
+
+    pub fn intersection(&self, other: &Rect) -> Option&lt;Rect&gt;;
+    pub fn expand(&self, dx: i64, dy: i64) -> Rect;
+    pub fn manhattan_distance(&self, other: &Rect) -> i64;
+    pub fn bounding_union(&self, other: &Rect) -> Rect;
+    pub fn translate(&self, dx: i64, dy: i64) -> Rect;
+}</code></pre>
+        <p>
+          The constructor enforces the non-degeneracy invariant: zero-width or
+          zero-height rectangles are rejected because they create ambiguous
+          containment semantics and degenerate spatial-index entries.
+          <code>Rect</code> is <code>Copy</code>, 32 bytes, and fits in half a
+          cache line with no pointer chasing.
+        </p>
+
+        <h3>RectiPoly — rectilinear polygon</h3>
+        <p>
+          A polygon where every edge is axis-aligned — L-shapes, T-shapes,
+          U-shapes, and the min-area patches that DRC rules sometimes require.
+          Vertices are stored in counter-clockwise (CCW) order. The first
+          vertex is not repeated at the end.
+        </p>
+        <pre><code>pub struct RectiPoly {
+    vertices: Vec&lt;Point&gt;,     // CCW, >= 4 vertices, all edges axis-aligned
+}
+
+impl RectiPoly {
+    pub fn new(vertices: Vec&lt;Point&gt;) -> Result&lt;Self, GeomError&gt;;
+    pub fn bounding_box(&self) -> Rect;
+    pub fn contains(&self, p: Point) -> bool;
+    pub fn area(&self) -> i64;
+    pub fn decompose(&self) -> Vec&lt;Rect&gt;;
+    pub fn edges(&self) -> impl Iterator&lt;Item = (Point, Point)&gt; + '_;
+}</code></pre>
+        <p>
+          The constructor validates three invariants: all edges are
+          axis-aligned, the winding is CCW (CW input is reversed
+          automatically), and the polygon is simple (non-self-intersecting).
+          <code>decompose()</code> breaks the polygon into non-overlapping
+          axis-aligned rectangles using a horizontal-sweep maximal-strip
+          algorithm, enabling spatial-index insertion and DRC checking on
+          arbitrary rectilinear shapes.
+        </p>
+        <div class="note">
+          <strong>No arbitrary polygons.</strong> 45-degree and freeform
+          geometry is out of scope. Routing and placement geometry in analog
+          CMOS is overwhelmingly rectilinear. If RF routing eventually demands
+          angled geometry, it will be added as a separate shape type — the
+          existing rectilinear types will not be polluted with angle-handling
+          complexity.
+        </div>
+
+        <h2 id="spatial-index">Spatial index architecture</h2>
+
+        <h3>Layer-per-index R-tree</h3>
+        <p>
+          The spatial index uses a <strong>one-R-tree-per-layer</strong>
+          architecture, backed by the <code>rstar</code> crate. This
+          granularity is chosen for three reasons:
+        </p>
+        <ol>
+          <li>
+            <strong>DRC rules are intra-layer or adjacent-layer.</strong> A
+            minimum-spacing check on metal1 only needs metal1 shapes. Querying
+            a single-layer index returns no cross-layer noise and avoids
+            post-filtering.
+          </li>
+          <li>
+            <strong>Per-layer shape counts are manageable.</strong> A typical
+            analog block has thousands of shapes per layer, not millions. A
+            single R-tree per layer stays cache-friendly and has fast query
+            times.
+          </li>
+          <li>
+            <strong>Layer iteration is natural.</strong> Many operations sweep
+            layer by layer (DRC, extraction, GDS output). Per-layer indices
+            align with this pattern.
+          </li>
+        </ol>
+        <p>
+          The index is behind a <code>SpatialIndex</code> trait so the backend
+          can be swapped without touching callers:
+        </p>
+        <pre><code>pub trait SpatialIndex: Send + Sync {
+    fn insert(&mut self, shape: ShapeRef);
+    fn remove(&mut self, id: ShapeId) -> bool;
+    fn query_point(&self, point: Point) -> Vec&lt;&ShapeRef&gt;;
+    fn query_window(&self, rect: &Rect) -> Vec&lt;&ShapeRef&gt;;
+    fn query_nearest(&self, point: Point, k: usize) -> Vec&lt;&ShapeRef&gt;;
+    fn len(&self) -> usize;
+    fn is_empty(&self) -> bool;
+}</code></pre>
+
+        <h2 id="geometry-store">The GeometryStore</h2>
+        <p>
+          <code>GeometryStore</code> is the top-level container that routes all
+          geometry operations through the per-layer spatial indices. It owns
+          the monotonic <code>ShapeId</code> allocator and a secondary
+          owner-to-shapes index for ownership queries.
+        </p>
+        <pre><code>pub struct GeometryStore {
+    layers: BTreeMap&lt;LayerId, RTreeIndex&gt;,
+    next_id: u64,
+    owner_index: BTreeMap&lt;ShapeOwner, Vec&lt;ShapeId&gt;&gt;,
+}
+
+impl GeometryStore {
+    pub fn insert(&mut self, layer: LayerId, owner: ShapeOwner,
+                  geometry: ShapeGeometry) -> ShapeId;
+    pub fn remove(&mut self, id: ShapeId) -> bool;
+
+    pub fn query_point(&self, layer: LayerId, point: Point)
+        -> Vec&lt;&ShapeRef&gt;;
+    pub fn query_window(&self, layer: LayerId, rect: &Rect)
+        -> Vec&lt;&ShapeRef&gt;;
+    pub fn query_within_distance(&self, layer: LayerId, rect: &Rect,
+                                 distance: i64) -> Vec&lt;&ShapeRef&gt;;
+    pub fn shapes_of(&self, owner: ShapeOwner) -> Vec&lt;&ShapeRef&gt;;
+}</code></pre>
+        <p>
+          Key properties:
+        </p>
+        <ul>
+          <li>
+            <strong>Monotonic IDs.</strong> <code>ShapeId</code> values only
+            increase. An ID is never reused after <code>remove</code>, even if
+            the slot is logically free. This prevents dangling-reference bugs
+            where a stale ID resolves to a different shape after rip-up and
+            re-route.
+          </li>
+          <li>
+            <strong>Owner index.</strong> A secondary
+            <code>BTreeMap&lt;ShapeOwner, Vec&lt;ShapeId&gt;&gt;</code> enables
+            <code>shapes_of(Net(id))</code> queries without scanning every
+            layer. This is used by the routing state's ownership map and by
+            the LVS connectivity checker.
+          </li>
+          <li>
+            <strong>Deterministic iteration.</strong> <code>BTreeMap</code>
+            is used everywhere instead of <code>HashMap</code>. Iteration
+            order is sorted by key, which is required for deterministic
+            certificate replay.
+          </li>
+          <li>
+            <strong>Lazy layer creation.</strong> A layer index is created
+            on first insertion. Querying a layer that has never had a shape
+            returns an empty result, not an error.
+          </li>
+        </ul>
+        <div class="note warn">
+          <strong>query_within_distance is not a radius search.</strong> It
+          dilates the query rectangle by <code>distance</code> on each side
+          and queries the expanded window, then post-filters by actual
+          Manhattan distance between the query rect and each result's bounding
+          box. This is the correct semantic for DRC spacing checks: "find all
+          shapes whose edge-to-edge distance from this shape is less than
+          <code>d</code>."
+        </div>
+
+        <h2 id="shape-ref">ShapeRef — shapes with ownership metadata</h2>
+        <p>
+          A <code>ShapeRef</code> is the unit of storage in the spatial index.
+          It pairs a geometric shape with the metadata that consumers need for
+          DRC, LVS, and ownership tracking:
+        </p>
+        <pre><code>pub struct ShapeRef {
+    pub id: ShapeId,              // monotonic, never-reused
+    pub layer: LayerId,           // which layer this shape lives on
+    pub owner: ShapeOwner,        // Net(id) | Obstacle | Pin(id) | Fill | Shield(id)
+    pub bbox: Rect,               // cached bounding box (R-tree envelope)
+    pub geometry: ShapeGeometry,  // Rect(Rect) | Poly(RectiPoly)
+}
+
+pub enum ShapeOwner {
+    Net(NetId),
+    Obstacle,
+    Pin(TerminalId),
+    Fill,
+    Shield(NetId),
+}
+
+pub enum ShapeGeometry {
+    Rect(Rect),
+    Poly(RectiPoly),
+}</code></pre>
+        <p>
+          The <code>bbox</code> field is the R-tree envelope and is always
+          equal to <code>geometry.bounding_box()</code>. The store enforces
+          this at insertion time. The <code>owner</code> field carries enough
+          information for DRC to distinguish same-net from different-net
+          pairs, for LVS to track connectivity, and for the routing state to
+          map shapes back to their owning nets.
+        </p>
+
+        <h2 id="orientation">Orientation transforms</h2>
+        <p>
+          IC layout uses eight standard orientations, forming the dihedral
+          group D<sub>4</sub>. The kernel provides a closed
+          <code>Orientation</code> enum with transform methods:
+        </p>
+        <table>
+          <thead>
+            <tr><th>Orientation</th><th>x'</th><th>y'</th><th>Description</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>R0</code></td><td>x</td><td>y</td><td>Identity</td></tr>
+            <tr><td><code>R90</code></td><td>-y</td><td>x</td><td>90 degrees CCW</td></tr>
+            <tr><td><code>R180</code></td><td>-x</td><td>-y</td><td>180 degrees</td></tr>
+            <tr><td><code>R270</code></td><td>y</td><td>-x</td><td>270 degrees CCW</td></tr>
+            <tr><td><code>MX</code></td><td>x</td><td>-y</td><td>Mirror about X axis</td></tr>
+            <tr><td><code>MY</code></td><td>-x</td><td>y</td><td>Mirror about Y axis</td></tr>
+            <tr><td><code>MXR90</code></td><td>y</td><td>x</td><td>MX then R90</td></tr>
+            <tr><td><code>MYR90</code></td><td>-y</td><td>-x</td><td>MY then R90</td></tr>
+          </tbody>
+        </table>
+        <pre><code>pub enum Orientation {
+    R0, R90, R180, R270, MX, MY, MXR90, MYR90,
+}
+
+impl Orientation {
+    pub fn apply_point(self, p: Point) -> Point;
+    pub fn apply_rect(self, r: Rect) -> Rect;
+    pub fn apply_about(self, p: Point, center: Point) -> Point;
+    pub fn apply_poly(self, poly: &RectiPoly, center: Point) -> RectiPoly;
+    pub fn inverse(self) -> Orientation;
+    pub fn compose(self, other: Orientation) -> Orientation;
+    pub fn is_reflected(self) -> bool;
+}</code></pre>
+        <p>
+          <code>apply_about</code> is the method consumers typically call: it
+          transforms a point relative to a center (the device's bounding-box
+          center for placement, the cell origin for GDS output). Internally it
+          translates to the origin, applies the orientation, and translates
+          back.
+        </p>
+        <p>
+          The placement engine uses <code>MY</code> as the default mirror for
+          symmetric pairs (reflection about the vertical center axis). The
+          constraint compiler determines which mirror operation a
+          <code>Symmetric</code> constraint implies based on the symmetry-axis
+          direction and maps it to the appropriate <code>Orientation</code>
+          variant.
+        </p>
+        <div class="note">
+          <strong>Group closure.</strong> The eight orientations are closed
+          under <code>compose</code> — composing any two orientations produces
+          another member of the set. <code>inverse</code> is its own inverse:
+          <code>o.compose(o.inverse()) == R0</code> for all <code>o</code>.
+          The implementation verifies this with an exhaustive test over all 64
+          compose pairs.
+        </div>
+
+        <h2 id="boolean-ops">Boolean operations</h2>
+        <p>
+          Three boolean operations are provided: merge (union), clip
+          (intersection), and difference. Each has a rect-rect fast path and a
+          general scanline sweep for rectilinear regions.
+        </p>
+
+        <h3>Rect-rect fast path</h3>
+        <p>
+          Most boolean operations in both placement and routing involve two
+          rectangles. The fast path handles these with direct coordinate
+          comparisons and no heap allocation (for intersection) or minimal
+          allocation (at most 3-4 output rects for union/difference):
+        </p>
+        <ul>
+          <li>
+            <code>rect_intersect(a, b) -> Option&lt;Rect&gt;</code> — trivial:
+            <code>max(a.x_lo, b.x_lo)</code>, <code>min(a.x_hi, b.x_hi)</code>,
+            etc. Returns <code>None</code> if the result would be degenerate.
+          </li>
+          <li>
+            <code>rect_union(a, b) -> BooleanResult</code> — if overlapping,
+            decomposes into at most 3 non-overlapping rects. If disjoint,
+            returns both as-is.
+          </li>
+          <li>
+            <code>rect_difference(a, b) -> BooleanResult</code> — subtracts
+            <code>b</code> from <code>a</code>, producing at most 4
+            non-overlapping rects.
+          </li>
+        </ul>
+
+        <h3>General scanline sweep</h3>
+        <p>
+          For multi-rect or <code>RectiPoly</code> operands, the kernel uses a
+          y-coordinate sweep:
+        </p>
+        <ol>
+          <li>
+            Collect all unique y-coordinates from both operand sets as sweep
+            events.
+          </li>
+          <li>
+            Sort events. Between consecutive y-values, the cross-section is a
+            set of horizontal intervals.
+          </li>
+          <li>
+            Apply the boolean operation (union/intersection/difference) to the
+            interval sets using a sorted-interval merge algorithm.
+          </li>
+          <li>
+            Reconstruct the result as a set of maximal-height axis-aligned
+            rectangles.
+          </li>
+        </ol>
+        <p>
+          Complexity: <code>O((n + k) log n)</code> where <code>n</code> is
+          the total vertex count and <code>k</code> is the number of
+          intersection events. For the shapes analog layout produces (typically
+          fewer than 20 vertices per polygon), this is fast.
+        </p>
+
+        <h2 id="consumers">Who consumes this crate</h2>
+
+        <h3>The placement engine (<code>crates/place</code>)</h3>
+        <p>
+          Placement uses the geometry kernel for:
+        </p>
+        <ul>
+          <li>
+            <strong>Device bounding boxes.</strong> The primitive catalog
+            stores each device template as a <code>Rect</code> at origin.
+            <code>Rect::bounding_union</code> computes the overall bbox.
+          </li>
+          <li>
+            <strong>Overlap checks.</strong> The SA cost function calls
+            <code>Rect::overlaps</code> to detect device-device overlaps.
+          </li>
+          <li>
+            <strong>DRC spacing.</strong> The placement DRC oracle uses
+            <code>Rect::manhattan_distance</code> and
+            <code>GeometryStore::query_within_distance</code> to check
+            minimum spacing rules between placed devices.
+          </li>
+          <li>
+            <strong>Device R-tree.</strong> The SA solver maintains a
+            <code>GeometryStore</code> for fast neighbor queries during
+            move evaluation.
+          </li>
+          <li>
+            <strong>Orientation transforms.</strong> GDS polygon emission
+            applies <code>Orientation::apply_rect</code> and
+            <code>apply_poly</code> to each device's template geometry at
+            its placed position and orientation.
+          </li>
+        </ul>
+
+        <h3>The routing engine (<code>crates/route</code>)</h3>
+        <p>
+          Routing uses the geometry kernel for:
+        </p>
+        <ul>
+          <li>
+            <strong>Wire shape management.</strong> Every committed wire
+            segment is inserted into the <code>GeometryStore</code> via
+            <code>insert</code>. Rip-up removes it via <code>remove</code>.
+          </li>
+          <li>
+            <strong>DRC check regions.</strong> After each commit, the
+            incremental DRC engine queries
+            <code>GeometryStore::query_window</code> on the affected region
+            (dilated by <code>r_max</code>) to find shapes that may violate
+            spacing rules.
+          </li>
+          <li>
+            <strong>Boolean ops for region clipping.</strong>
+            <code>difference(routing_region, obstacles)</code> computes the
+            legal routing space. <code>merge(net_shapes)</code> combines
+            overlapping same-net shapes for LVS connectivity.
+          </li>
+          <li>
+            <strong>Net ownership.</strong>
+            <code>GeometryStore::shapes_of(Net(id))</code> returns all shapes
+            belonging to a net, used by the routing state's ownership map.
+          </li>
+        </ul>
+
+        <h3>The constraints compiler (<code>crates/constraints</code>)</h3>
+        <p>
+          Constraints uses the kernel for geometric predicates: guard-ring
+          enclosure checks (<code>Rect::contains_rect</code>), spacing
+          verification (<code>Rect::manhattan_distance</code>), and
+          symmetry-axis mirror geometry
+          (<code>Orientation::apply_about</code>).
+        </p>
+
+        <h2 id="corner-stitching">Corner stitching (future option)</h2>
+        <p>
+          The R-tree answers "what shapes are here?" efficiently. It does
+          <em>not</em> answer "what is the largest empty rectangle containing
+          this point?" — that requires either a separate computation or a
+          fundamentally different data structure.
+        </p>
+        <p>
+          <strong>Corner stitching</strong> tiles the entire plane with
+          non-overlapping rectangles, including explicit <em>space tiles</em>
+          for empty regions. This makes empty-space queries nearly free: the
+          space tile at a point <em>is</em> the answer. This matters for the
+          routing access oracle ("find a legal landing pad here") and the
+          detailed router ("find a legal jog here").
+        </p>
+        <p>
+          The cost is significant: corner stitching is approximately 5x the
+          implementation complexity of an R-tree wrapper. Insert and remove
+          require "stitch surgery" to split and merge tiles while maintaining
+          the maximal-horizontal-strip invariant. No standard Rust crate
+          provides it; it must be implemented from scratch.
+        </p>
+        <p>
+          The decision: use the R-tree through Phase 2. If profiling shows
+          that empty-space queries are a bottleneck in Phase 3 (specifically
+          in the access oracle and detailed router), implement corner stitching
+          as an alternative <code>SpatialIndex</code> backend. The trait
+          boundary means the switch is local to the index module — no consumer
+          code changes.
+        </p>
+        <div class="note warn">
+          <strong>Do not implement speculatively.</strong> Corner stitching is
+          a known-good data structure for VLSI layout tools (Magic, KLayout
+          internals). But it is a large engineering investment and its benefit
+          depends on the query mix. The trait boundary is the insurance policy:
+          it costs nothing now and makes the switch possible later.
+        </div>
+
+        <h2 id="module-map">Module map</h2>
+        <table>
+          <thead>
+            <tr><th>Module</th><th>Owns</th><th>Public?</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>coord</code></td>
+              <td><code>Point</code>, coordinate helpers</td>
+              <td>Yes</td>
+            </tr>
+            <tr>
+              <td><code>rect</code></td>
+              <td><code>Rect</code> (axis-aligned rectangle)</td>
+              <td>Yes</td>
+            </tr>
+            <tr>
+              <td><code>polygon</code></td>
+              <td><code>RectiPoly</code> (rectilinear polygon)</td>
+              <td>Yes</td>
+            </tr>
+            <tr>
+              <td><code>orient</code></td>
+              <td><code>Orientation</code> enum + transforms</td>
+              <td>Yes</td>
+            </tr>
+            <tr>
+              <td><code>boolean</code></td>
+              <td>Merge, clip, difference (rect fast-path + scanline)</td>
+              <td>Yes</td>
+            </tr>
+            <tr>
+              <td><code>scan</code></td>
+              <td>Scanline sweep internals (interval ops, event queue)</td>
+              <td>No (<code>pub(crate)</code>)</td>
+            </tr>
+            <tr>
+              <td><code>shape</code></td>
+              <td><code>ShapeId</code>, <code>ShapeOwner</code>, <code>ShapeGeometry</code>, <code>ShapeRef</code></td>
+              <td>Yes</td>
+            </tr>
+            <tr>
+              <td><code>spatial</code></td>
+              <td><code>SpatialIndex</code> trait</td>
+              <td>Yes</td>
+            </tr>
+            <tr>
+              <td><code>rtree</code></td>
+              <td>R-tree backend wrapping <code>rstar</code></td>
+              <td>Yes</td>
+            </tr>
+            <tr>
+              <td><code>store</code></td>
+              <td><code>GeometryStore</code> (top-level container)</td>
+              <td>Yes</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h2 id="invariants">Key invariants</h2>
+        <table>
+          <thead>
+            <tr><th>#</th><th>Invariant</th><th>Enforced by</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>1</td>
+              <td><code>Rect</code> is non-degenerate: <code>x_lo &lt; x_hi</code> and <code>y_lo &lt; y_hi</code></td>
+              <td>Constructor (<code>new</code> panics, <code>try_new</code> returns <code>None</code>)</td>
+            </tr>
+            <tr>
+              <td>2</td>
+              <td><code>RectiPoly</code> vertices are CCW, axis-aligned, simple</td>
+              <td>Constructor validates and reverses CW input</td>
+            </tr>
+            <tr>
+              <td>3</td>
+              <td><code>ShapeId</code> values are monotonic and never reused</td>
+              <td><code>GeometryStore</code> increments counter; never recycles</td>
+            </tr>
+            <tr>
+              <td>4</td>
+              <td><code>ShapeRef::bbox == geometry.bounding_box()</code></td>
+              <td><code>GeometryStore::insert</code> computes bbox from geometry</td>
+            </tr>
+            <tr>
+              <td>5</td>
+              <td>All iteration is deterministic (sorted by key)</td>
+              <td><code>BTreeMap</code> everywhere; no <code>HashMap</code></td>
+            </tr>
+            <tr>
+              <td>6</td>
+              <td>All public types are <code>Send + Sync</code></td>
+              <td>No <code>Rc</code>, <code>Cell</code>, or interior mutability</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h2 id="dependencies">Dependencies</h2>
+        <p>
+          The geometry kernel is a leaf crate with minimal dependencies:
+        </p>
+        <table>
+          <thead>
+            <tr><th>Crate</th><th>Version</th><th>Purpose</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>rstar</code></td>
+              <td>0.12</td>
+              <td>R-tree spatial index with native <code>i64</code> coordinate support</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          No floating-point geometry crates (<code>geo</code>,
+          <code>parry2d</code>), no serialization (<code>serde</code>), no
+          intra-workspace dependencies. The kernel is self-contained.
+        </p>
+
+        <div class="note danger">
+          <strong>Soundness boundary.</strong> The geometry kernel provides
+          correct shapes, correct spatial queries, and correct boolean
+          operations. It does not provide DRC rule semantics (which spacing
+          applies to which layer pair), technology interpretation (what a
+          layer means electrically), or signoff guarantees. Those belong to
+          the technology compiler, the DRC engine, and the constraint
+          certificate, respectively. The kernel is infrastructure — it makes
+          those higher-level systems possible, but it is not a substitute for
+          them.
+        </div>
+
+        <p>
+          <strong>Implementation plan:</strong>
+          <a href="https://github.com/OmarSiwy/Philis/blob/main/crates/geom/PLAN.md">crates/geom/PLAN.md</a>
+        </p>
+      </main>
+    </div>
+
+    <footer class="site-footer">Philis &middot; Analog Layout Engine</footer>
+      <script src="../../nav.js"></script>
+  </body>
+</html>

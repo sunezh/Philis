@@ -1,0 +1,816 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Solver — Philis</title>
+    <link rel="stylesheet" href="../../style.css" />
+    <link rel="icon" type="image/svg+xml" href="../../brand.svg" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../../index.html">
+        <img src="../../brand.svg" alt="Philis" />
+        Philis
+      </a>
+      <nav class="top-nav">
+        <a href="../../index.html">Home</a>
+        <a href="../../Usage/getting-started.html">Usage</a>
+        <a href="../api/index.html" class="active">Developer</a>
+        <a href="https://github.com/OmarSiwy/Philis">GitHub</a>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <h4>Developer</h4>
+        <ul>
+          <li><a href="../api/index.html">API</a></li>
+          <li><a href="../geom/index.html">Geometry</a></li>
+          <li><a href="../tech/index.html">Technology</a></li>
+          <li><a href="../verify/index.html">Verify</a></li>
+          <li>
+            <a href="../solver/index.html" class="active">Solver</a>
+          </li>
+          <li><a href="../place/index.html">Place</a></li>
+          <li><a href="../route/index.html">Route</a></li>
+          <li><a href="../constraints/index.html">Constraints</a></li>
+        </ul>
+        <h4>Solver</h4>
+        <ul>
+          <li><a href="index.html" class="active">Overview</a></li>
+        </ul>
+        <h4>Usage</h4>
+        <ul>
+          <li>
+            <a href="../../Usage/getting-started.html">Getting Started</a>
+          </li>
+          <li><a href="../../Usage/installation.html">Installation</a></li>
+        </ul>
+      </aside>
+
+      <main class="content">
+        <p class="breadcrumb">
+          <a href="../../index.html">Home</a> / Developer / Solver
+        </p>
+
+        <h1>The Philis Solver Abstraction</h1>
+        <p>
+          <strong>Status:</strong> design reference. This section specifies the
+          target contract that <code>crates/solver</code>
+          (<code>philis-solver</code>) is meant to fill. The crate today is an
+          empty scaffold with trait definitions and a builtin exhaustive backend
+          planned. See <a href="#status">Implementation status</a>.
+        </p>
+
+        <blockquote>
+          <p>
+            <strong>The one-sentence thesis.</strong> The concrete solver
+            backend is a <em>deployment</em> decision, not an
+            <em>architectural</em> one. Consumer crates program against traits;
+            the user picks the backend at compile time via cargo features.
+          </p>
+        </blockquote>
+
+        <h2 id="why-solvers">Why formal solvers in an analog layout engine?</h2>
+        <p>
+          Analog place-and-route is not a heuristic-only domain. Several core
+          subproblems in the Philis engine are fundamentally
+          <em>decision problems</em> — questions with a yes/no answer that a
+          formal solver can answer exactly, where a heuristic can only
+          approximate. The three solver families the engine needs correspond to
+          three kinds of decision problem:
+        </p>
+        <table>
+          <thead>
+            <tr><th>Solver family</th><th>Decision problem</th><th>Where it appears in Philis</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>SAT</strong> (Boolean satisfiability)</td>
+              <td>"Does there exist an assignment of Boolean variables that satisfies all clauses?"</td>
+              <td>Pin-access compatible-subset selection (route), grouped escape topology enumeration (route), MUS/MCS extraction for contradiction cores (constraints)</td>
+            </tr>
+            <tr>
+              <td><strong>ILP</strong> (Integer Linear Programming)</td>
+              <td>"Does there exist an integer-valued assignment that satisfies all linear inequalities, and if so, what is the optimum?"</td>
+              <td>Via/color/min-area legality in the exact-local routing engine, resource allocation in placement</td>
+            </tr>
+            <tr>
+              <td><strong>SMT</strong> (Satisfiability Modulo Theories)</td>
+              <td>"Does there exist an assignment that satisfies Boolean structure <em>and</em> theory constraints (arithmetic, bitvectors, arrays)?"</td>
+              <td>Advanced reconciliation passes that reason over arithmetic spacing/width constraints (future)</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          The key insight is that these are not exotic tools bolted onto a
+          layout engine as an afterthought. They are the <em>natural</em>
+          formalization of questions the engine must answer anyway. When the
+          route crate asks "is there a legal via assignment for this local
+          region?", it is asking a SAT question. When the constraint crate
+          asks "what is the smallest set of obligations that are jointly
+          infeasible?", it is asking an MUS question. Making the solver
+          explicit — rather than burying ad-hoc backtracking in each consumer
+          — is what makes the answers sound and the implementations
+          replaceable.
+        </p>
+
+        <h2 id="hot-switch">The hot-switchable backend pattern</h2>
+        <p>
+          Different users have different solver backends available. An academic
+          user may have CaDiCaL (open-source, no license cost) but not CPLEX.
+          An industry user may have CPLEX (commercial, high performance) but
+          prefer not to depend on CaDiCaL. A CI environment may have neither
+          and need a fallback.
+        </p>
+        <p>
+          Philis handles this with a pattern common in high-performance
+          computing but rare in EDA: <strong>trait interfaces</strong> with
+          <strong>feature-gated backends</strong>.
+        </p>
+        <pre><code>// Consumer code (e.g., crates/constraints/src/reconcile.rs)
+// Programs against the trait — never mentions a concrete backend.
+fn find_contradiction_core(solver: &amp;mut dyn SatSolver, obligations: &amp;[Clause]) -&gt; MusResult {
+    extract_mus(solver, obligations, Some(10_000))
+}
+
+// Wiring code (e.g., crates/api/src/lib.rs)
+// Picks the backend based on what's available.
+#[cfg(feature = "cadical")]
+let mut solver = CadicalSolver::new();
+
+#[cfg(not(feature = "cadical"))]
+let mut solver = ExhaustiveSatSolver::new();</code></pre>
+        <p>
+          The consumer crate never imports a backend directly. It depends on
+          <code>philis-solver</code> and programs against <code>dyn SatSolver</code>
+          or <code>dyn IlpSolver</code>. The top-level binary or integration
+          test picks the concrete backend. This means:
+        </p>
+        <ul>
+          <li>
+            Adding a new backend (e.g., Z3) requires zero changes to the
+            consumer crates.
+          </li>
+          <li>
+            Removing a backend (e.g., dropping the CPLEX dependency for an
+            open-source release) requires changing one feature flag, not
+            rewriting solver call sites.
+          </li>
+          <li>
+            Testing can use the builtin exhaustive backend (no external
+            dependencies) while production uses CaDiCaL or HiGHS.
+          </li>
+        </ul>
+        <div class="note">
+          <strong>Cargo features, not runtime plugins.</strong> Backend
+          selection is a compile-time decision via cargo features, not a
+          runtime plugin system. This is deliberate: solver FFI bindings
+          involve unsafe code and C/C++ link dependencies that must be resolved
+          at build time. A runtime plugin system would push these dependencies
+          into the user's environment in ways that are hard to diagnose and
+          impossible to type-check.
+        </div>
+
+        <h2 id="sat-trait">The <code>SatSolver</code> trait</h2>
+        <p>
+          The <code>SatSolver</code> trait is the engine's interface to any
+          Boolean satisfiability solver. It models the
+          <strong>incremental, assumption-based</strong> SAT paradigm — the
+          same paradigm used by modern solvers like CaDiCaL, Glucose, and
+          MiniSAT.
+        </p>
+        <h3>What SAT solving means for layout</h3>
+        <p>
+          A SAT solver answers the question: "given a set of Boolean clauses
+          (disjunctions of literals), is there an assignment of variables that
+          makes all clauses true simultaneously?" In the layout domain, the
+          variables represent design choices and the clauses represent
+          constraints:
+        </p>
+        <ul>
+          <li>
+            <strong>Pin access selection (route crate).</strong> Each pin has
+            several candidate access patterns (directions a wire can approach
+            the pin). Each candidate is a Boolean variable. Geometric conflicts
+            between candidates are encoded as clauses ("if pin A uses access
+            pattern 2, then pin B cannot use access pattern 3"). The SAT solver
+            finds a compatible subset — an assignment where every pin has
+            exactly one access pattern and no two patterns conflict.
+          </li>
+          <li>
+            <strong>Escape topology enumeration (route crate).</strong> For a
+            group of pins that must escape a region (e.g., a transistor
+            array), the possible escape orderings and layer assignments are
+            encoded as Boolean variables. The SAT solver enumerates all
+            feasible topologies, or proves that none exist.
+          </li>
+          <li>
+            <strong>MUS extraction (constraints crate).</strong> The SAT
+            solver is used incrementally under assumptions to identify which
+            constraints participate in a proof of infeasibility. This is how
+            the engine computes contradiction cores — see
+            <a href="#mus-mcs">MUS/MCS extraction</a> below.
+          </li>
+        </ul>
+        <h3>Trait surface</h3>
+        <pre><code>pub trait SatSolver {
+    fn new_var(&amp;mut self) -&gt; VarId;
+    fn add_clause(&amp;mut self, lits: &amp;[Lit]);
+    fn solve(&amp;mut self) -&gt; SolverStatus;
+    fn solve_under_assumptions(&amp;mut self, assumptions: &amp;[Lit]) -&gt; SolverStatus;
+    fn model(&amp;self) -&gt; Option&lt;&amp;[bool]&gt;;
+    fn unsat_core(&amp;self) -&gt; Option&lt;Vec&lt;Lit&gt;&gt;;
+    fn num_vars(&amp;self) -&gt; u32;
+    fn num_clauses(&amp;self) -&gt; u64;
+    fn set_timeout(&amp;mut self, millis: Option&lt;u64&gt;);
+}</code></pre>
+        <p>
+          Key design decisions:
+        </p>
+        <ul>
+          <li>
+            <code>solve_under_assumptions</code> is required, not optional.
+            Assumption-based incremental solving is the foundation of MUS
+            extraction and is supported by every serious SAT solver. A backend
+            that cannot do this is not useful to Philis.
+          </li>
+          <li>
+            <code>unsat_core</code> returns <code>Option</code> — some backends
+            (the exhaustive enumerator) do not support core extraction. The MUS
+            algorithm handles this gracefully by falling back to
+            deletion-based extraction.
+          </li>
+          <li>
+            <code>model</code> is indexed by <code>VarId</code> — entry
+            <code>i</code> is the assignment of <code>VarId(i)</code>. This
+            avoids the overhead of a <code>HashMap</code> for what is
+            fundamentally a dense array lookup.
+          </li>
+        </ul>
+        <h3>Supporting types</h3>
+        <pre><code>/// Opaque variable identifier. Internally a u32 index.
+pub struct VarId(pub u32);
+
+/// A literal: a variable with a polarity.
+pub struct Lit { pub var: VarId, pub positive: bool }
+
+/// Result of a solver invocation.
+pub enum SolverStatus { Sat, Unsat, Unknown, Timeout }</code></pre>
+
+        <h2 id="ilp-trait">The <code>IlpSolver</code> trait</h2>
+        <p>
+          The <code>IlpSolver</code> trait is the engine's interface to any
+          Integer/Linear Programming solver. It models a standard LP/MIP
+          interface: create variables with bounds and integrality constraints,
+          add linear constraints, set an objective, and solve.
+        </p>
+        <h3>What ILP solving means for layout</h3>
+        <p>
+          An ILP solver answers the question: "given a set of linear
+          inequalities over integer (or real) variables, is there a feasible
+          assignment, and if so, what assignment optimizes a linear objective?"
+          In the layout domain:
+        </p>
+        <ul>
+          <li>
+            <strong>Via/color/min-area legality (route crate).</strong> The
+            exact-local routing engine encodes via choices, metal coloring
+            (for multi-patterning), and minimum-area fill requirements as ILP
+            variables. The constraints are geometric legality rules. The
+            objective is typically to minimize via count or total wire area.
+            The ILP solver finds the optimal legal assignment or proves that
+            no legal assignment exists.
+          </li>
+          <li>
+            <strong>Resource allocation (placement).</strong> Distributing
+            devices across placement regions while respecting area, aspect
+            ratio, and well-proximity constraints can be modeled as an ILP
+            when the number of candidate regions is small.
+          </li>
+        </ul>
+        <h3>Trait surface</h3>
+        <pre><code>pub trait IlpSolver {
+    fn new_var(&amp;mut self, lb: f64, ub: f64, obj_coeff: f64, is_integer: bool) -&gt; IlpVarId;
+    fn add_constraint(&amp;mut self, lhs: &amp;[(IlpVarId, f64)], sense: Sense, rhs: f64);
+    fn set_objective(&amp;mut self, dir: ObjDir, coeffs: &amp;[(IlpVarId, f64)]);
+    fn solve(&amp;mut self) -&gt; SolverStatus;
+    fn solution(&amp;self) -&gt; Option&lt;&amp;[f64]&gt;;
+    fn objective_value(&amp;self) -&gt; Option&lt;f64&gt;;
+    fn num_vars(&amp;self) -&gt; u32;
+    fn num_constraints(&amp;self) -&gt; u32;
+    fn set_timeout(&amp;mut self, millis: Option&lt;u64&gt;);
+}</code></pre>
+        <h3>Supporting types</h3>
+        <pre><code>pub struct IlpVarId(pub u32);
+
+/// Constraint sense: Le (<=), Ge (>=), Eq (==).
+pub enum Sense { Le, Ge, Eq }
+
+/// Objective direction.
+pub enum ObjDir { Minimize, Maximize }</code></pre>
+
+        <h2 id="mus-mcs">MUS/MCS extraction and contradiction cores</h2>
+        <p>
+          MUS and MCS extraction are the bridge between formal solving and
+          Philis's constraint reconciliation system. They answer two dual
+          questions about an infeasible constraint set:
+        </p>
+        <table>
+          <thead>
+            <tr><th>Concept</th><th>Question</th><th>Use in Philis</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>MUS</strong> (Minimal Unsatisfiable Subset)</td>
+              <td>"What is the smallest set of constraints that are jointly infeasible?"</td>
+              <td>The contradiction core in the <a href="../constraints/index.html">constraint certificate</a>. A MUS tells the designer which obligations conflict and cannot be simultaneously honored.</td>
+            </tr>
+            <tr>
+              <td><strong>MCS</strong> (Minimal Correction Set)</td>
+              <td>"What is the smallest set of constraints whose removal restores feasibility?"</td>
+              <td>Repair strategies in reconciliation. Each MCS is a candidate waiver set — removing those obligations makes the remaining set satisfiable.</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          The two are mathematically dual: every MUS is a minimal hitting set
+          of the MCS family, and vice versa. The solver crate provides both
+          because the constraint crate needs both: the MUS for the
+          contradiction core (what is wrong) and the MCS for the repair
+          strategy (how to fix it).
+        </p>
+        <h3>Why this matters for analog layout</h3>
+        <p>
+          In analog layout, constraint conflicts are <em>expected</em>, not
+          exceptional. A user declares symmetry for a differential pair. A
+          host template fixes output pins at locations that make the symmetry
+          axis geometrically impossible. A PDK minimum spacing rule forces the
+          symmetric devices apart by more than the template allows. These are
+          three independently correct specifications that together are
+          infeasible.
+        </p>
+        <p>
+          Without MUS extraction, the engine can only say "the constraint set
+          is infeasible" — a useless diagnostic for a designer staring at 200
+          obligations. With MUS extraction, the engine can say "these three
+          specific obligations are jointly infeasible" and present the minimal
+          conflict core. With MCS enumeration, it can add "you can resolve
+          this by waiving obligation A, or by waiving obligation B" — concrete
+          repair strategies the designer can evaluate.
+        </p>
+        <h3>The deletion-based MUS algorithm</h3>
+        <p>
+          The solver crate implements a deletion-based MUS algorithm, which
+          works as follows:
+        </p>
+        <ol>
+          <li>
+            <strong>Activate all soft clauses</strong> by adding assumption
+            literals. Each soft clause <code>C_i</code> is guarded by an
+            activation variable <code>act_i</code>: the clause
+            <code>[neg(act_i)] ++ C_i</code> is added permanently, and
+            activating clause <code>i</code> means assuming
+            <code>act_i = true</code>.
+          </li>
+          <li>
+            <strong>Check feasibility.</strong> If the formula is SAT with all
+            soft clauses active, return <code>Satisfiable</code> — no MUS
+            exists.
+          </li>
+          <li>
+            <strong>For each soft clause</strong> in the current working set:
+            <ul>
+              <li>Tentatively remove it (deactivate its assumption).</li>
+              <li>Solve under the remaining assumptions.</li>
+              <li>If still UNSAT: the clause is redundant — keep it removed.</li>
+              <li>If SAT: the clause is necessary for the UNSAT proof — restore it.</li>
+            </ul>
+          </li>
+          <li>
+            <strong>Budget check.</strong> If the solver call budget is
+            exhausted before all clauses are tested, return
+            <code>Unknown</code> with the current (possibly non-minimal)
+            subset.
+          </li>
+          <li>
+            <strong>The remaining clauses form the MUS.</strong>
+          </li>
+        </ol>
+        <p>
+          The algorithm makes at most <code>n</code> solver calls (one per
+          soft clause) and produces a guaranteed-minimal UNSAT subset. The
+          budget parameter ensures it terminates predictably even on large
+          instances where individual solver calls may be expensive.
+        </p>
+        <h3>MUS result type</h3>
+        <pre><code>pub enum MusResult {
+    /// Guaranteed minimal UNSAT subset. Indices into the soft_clauses slice.
+    Minimal(Vec&lt;usize&gt;),
+    /// Budget exhausted. Possibly non-minimal UNSAT subset.
+    Unknown(Vec&lt;usize&gt;),
+    /// All soft clauses together are satisfiable — no MUS exists.
+    Satisfiable,
+}</code></pre>
+
+        <h2 id="builders">Convenience builders</h2>
+        <p>
+          Many solver encoding patterns recur across consumer crates. Rather
+          than having each consumer re-implement "at most one of these
+          variables is true" (a pattern that appears in both pin-access
+          selection and obligation exclusion), the solver crate provides
+          reusable builder functions that add clauses to an existing
+          <code>SatSolver</code>:
+        </p>
+        <table>
+          <thead>
+            <tr><th>Builder</th><th>Constraint</th><th>Encoding</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>at_most_one(solver, vars)</code></td>
+              <td>At most one of <code>vars</code> is true</td>
+              <td>Pairwise (n &le; 5), sequential counter (n &le; 20), commander (n &gt; 20)</td>
+            </tr>
+            <tr>
+              <td><code>exactly_one(solver, vars)</code></td>
+              <td>Exactly one of <code>vars</code> is true</td>
+              <td><code>at_most_one</code> + one disjunctive clause</td>
+            </tr>
+            <tr>
+              <td><code>at_most_k(solver, vars, k)</code></td>
+              <td>At most <code>k</code> of <code>vars</code> are true</td>
+              <td>Sequential counter (totalizer encoding)</td>
+            </tr>
+            <tr>
+              <td><code>at_least_k(solver, vars, k)</code></td>
+              <td>At least <code>k</code> of <code>vars</code> are true</td>
+              <td>Dual of <code>at_most_k</code> on negated variables</td>
+            </tr>
+            <tr>
+              <td><code>exactly_k(solver, vars, k)</code></td>
+              <td>Exactly <code>k</code> of <code>vars</code> are true</td>
+              <td><code>at_most_k</code> + <code>at_least_k</code></td>
+            </tr>
+            <tr>
+              <td><code>implication_chain(solver, vars)</code></td>
+              <td><code>v[0] &rarr; v[1] &rarr; ... &rarr; v[n-1]</code></td>
+              <td>One binary clause per implication</td>
+            </tr>
+            <tr>
+              <td><code>implies(solver, a, b)</code></td>
+              <td><code>a &rarr; b</code></td>
+              <td>Single clause <code>[neg(a), pos(b)]</code></td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          The <code>at_most_one</code> encoding selection is automatic based on
+          variable count. The pairwise encoding is optimal for very small sets
+          (it produces <code>n(n-1)/2</code> binary clauses, which modern SAT
+          solvers handle efficiently). The sequential counter encoding scales
+          linearly in auxiliary variables and clauses. The commander encoding
+          handles large sets by partitioning into groups.
+        </p>
+
+        <h2 id="backends">The backend landscape</h2>
+        <p>
+          The solver crate ships with one always-available backend and supports
+          additional backends behind cargo feature flags:
+        </p>
+        <table>
+          <thead>
+            <tr><th>Backend</th><th>Feature flag</th><th>Solver type</th><th>When to use</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>ExhaustiveSatSolver</strong></td>
+              <td>(always available)</td>
+              <td>SAT</td>
+              <td>Small subproblems (&lt;20 variables), testing. Enumerates all 2<sup>n</sup> assignments. No external dependencies.</td>
+            </tr>
+            <tr>
+              <td><strong>CaDiCaL</strong></td>
+              <td><code>cadical</code></td>
+              <td>SAT</td>
+              <td>Production SAT solving. State-of-the-art CDCL solver. Supports incremental solving, assumptions, and UNSAT core extraction. Open-source (MIT).</td>
+            </tr>
+            <tr>
+              <td><strong>HiGHS</strong></td>
+              <td><code>highs</code></td>
+              <td>ILP / LP</td>
+              <td>Production ILP solving. High-performance open-source LP/MIP solver. Handles the exact-local routing engine's via/color/area problems.</td>
+            </tr>
+            <tr>
+              <td><strong>Z3</strong> (future)</td>
+              <td><code>z3</code></td>
+              <td>SMT</td>
+              <td>Advanced reconciliation with theory constraints. Needed when constraint conflicts involve arithmetic (spacing + width bounds). Not in the initial build.</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="note warn">
+          <strong>The exhaustive backend is for small problems only.</strong>
+          It enumerates all 2<sup>n</sup> assignments, so it is exponential in
+          the number of variables. For problems with more than 20 variables,
+          it will either panic or return <code>Unknown</code>. Production code
+          should enable the <code>cadical</code> feature for SAT problems and
+          the <code>highs</code> feature for ILP problems.
+        </div>
+
+        <h2 id="consumers">Who consumes this crate</h2>
+        <h3>The constraints crate</h3>
+        <p>
+          The <a href="../constraints/index.html">constraint compiler</a>'s
+          reconciliation phase (phase four of the seven-phase pipeline) uses
+          the solver crate for two operations:
+        </p>
+        <ul>
+          <li>
+            <strong>MUS extraction</strong> — when the reconciled IntentGraph
+            contains obligations that are jointly infeasible, the constraint
+            crate calls <code>extract_mus</code> to compute the minimal
+            contradiction core. This core is recorded in the
+            <code>ConstraintCertificate</code> with an explicit minimality tag
+            and the algorithm that produced it (formal invariant #3:
+            contradiction-core minimality).
+          </li>
+          <li>
+            <strong>MCS enumeration</strong> — for each contradiction core, the
+            constraint crate calls <code>enumerate_mcs</code> to find all
+            minimal repair strategies. Each MCS is a candidate waiver set that
+            the authority-based resolution logic can evaluate.
+          </li>
+        </ul>
+        <p>
+          The constraint crate also uses the solver crate's lowering surface
+          for its quality comparator. The lexicographic objective
+          (hard &gt; bounded &gt; soft) maps to a series of solver calls:
+          first check hard feasibility (SAT), then optimize bounded metrics
+          (ILP), then optimize soft metrics (ILP). The solver crate provides
+          the traits; the constraint crate provides the lexicographic
+          sequencing.
+        </p>
+
+        <h3>The route crate</h3>
+        <p>
+          The <a href="../route/index.html">routing engine</a> uses the solver
+          crate in three contexts:
+        </p>
+        <ul>
+          <li>
+            <strong>Pin access oracle.</strong> The access oracle selects a
+            compatible subset of pin access patterns. Each pin has several
+            candidate access directions; geometric conflicts between
+            candidates are clauses. The SAT solver finds a conflict-free
+            assignment. For small pin groups (&lt;20 pins with &lt;4 candidates
+            each), the exhaustive backend suffices; for larger groups, CaDiCaL
+            is used.
+          </li>
+          <li>
+            <strong>Exact-local engine.</strong> The exact-local router
+            encodes via choices, metal coloring, and minimum-area fill as ILP
+            variables. The ILP solver (HiGHS) finds the optimal legal
+            assignment or proves infeasibility, triggering a rip-up and
+            reroute.
+          </li>
+          <li>
+            <strong>Escape topology enumeration.</strong> For grouped pins
+            (e.g., a transistor array's source/drain contacts), the possible
+            escape orderings and layer assignments are encoded as a SAT
+            formula. The solver enumerates all feasible topologies; the route
+            crate picks the one that best satisfies the routing objective.
+          </li>
+        </ul>
+
+        <details>
+          <summary>Why not just embed the solver in each consumer crate?</summary>
+          <div class="details-body">
+            <p>
+              It seems natural for each consumer to manage its own solver
+              dependency: the constraint crate pulls in CaDiCaL, the route
+              crate pulls in HiGHS, and each manages its own FFI bindings. This
+              is simpler in the short term but creates three problems that
+              compound over time:
+            </p>
+            <ol>
+              <li>
+                <strong>Duplicated MUS/MCS code.</strong> Both the constraint
+                crate and the route crate need MUS extraction — the constraint
+                crate for contradiction cores, the route crate for diagnosing
+                infeasible access patterns. Without a shared crate, each would
+                implement its own deletion-based MUS algorithm, with its own
+                bugs and its own performance characteristics. The MUS algorithm
+                is non-trivial (budget gating, assumption management,
+                incremental clause activation) and benefits from being written,
+                tested, and optimized once.
+              </li>
+              <li>
+                <strong>N copies of solver FFI bindings.</strong> CaDiCaL is a
+                C++ library. Wrapping it in safe Rust requires unsafe blocks,
+                lifetime management, and careful memory handling. Duplicating
+                this wrapper in two crates doubles the surface area for memory
+                safety bugs. A shared crate means one wrapper, one audit, one
+                set of tests.
+              </li>
+              <li>
+                <strong>No hot-switchable backends.</strong> If each consumer
+                embeds its own solver, the user cannot switch backends without
+                changing every consumer's dependency. With a shared crate, the
+                user enables one feature flag and every consumer that uses
+                <code>dyn SatSolver</code> gets the new backend. This is
+                especially important for CI (where the exhaustive backend
+                avoids external C++ dependencies) versus production (where
+                CaDiCaL is needed for performance).
+              </li>
+            </ol>
+            <p>
+              The cost of a shared crate is an additional node in the
+              dependency graph and a trait-based indirection (dynamic dispatch
+              via <code>dyn SatSolver</code>). The dynamic dispatch overhead is
+              negligible compared to the cost of a single solver call (which
+              involves search over an exponential space), and the dependency
+              node is a pure leaf with no transitive dependencies of its own
+              (when no backends are enabled).
+            </p>
+          </div>
+        </details>
+
+        <h2 id="convenience-encoding">Encoding patterns in practice</h2>
+        <p>
+          To make the solver crate's role concrete, here is how a consumer
+          would encode a real routing subproblem — pin-access selection for
+          three pins with two access candidates each:
+        </p>
+        <pre><code>use philis_solver::{SatSolver, ExhaustiveSatSolver, Lit, VarId, SolverStatus};
+use philis_solver::builders::{exactly_one};
+
+let mut solver = ExhaustiveSatSolver::new();
+
+// Each pin has two candidate access patterns.
+// Variables: pin0_a, pin0_b, pin1_a, pin1_b, pin2_a, pin2_b
+let vars: Vec&lt;VarId&gt; = (0..6).map(|_| solver.new_var()).collect();
+
+// Exactly one access pattern per pin.
+exactly_one(&amp;mut solver, &amp;[vars[0], vars[1]]);
+exactly_one(&amp;mut solver, &amp;[vars[2], vars[3]]);
+exactly_one(&amp;mut solver, &amp;[vars[4], vars[5]]);
+
+// Conflict: pin0_a and pin1_b cannot coexist (geometric overlap).
+solver.add_clause(&amp;[Lit::neg(vars[0]), Lit::neg(vars[3])]);
+
+// Conflict: pin1_a and pin2_a cannot coexist.
+solver.add_clause(&amp;[Lit::neg(vars[2]), Lit::neg(vars[4])]);
+
+match solver.solve() {
+    SolverStatus::Sat =&gt; {
+        let model = solver.model().unwrap();
+        // model[i] tells us which access pattern each pin uses.
+    }
+    SolverStatus::Unsat =&gt; {
+        // No compatible access assignment exists — need to rethink
+        // pin placement or add more access candidates.
+    }
+    _ =&gt; { /* timeout or unknown */ }
+}</code></pre>
+
+        <h2 id="module-map">Module map</h2>
+        <table>
+          <thead>
+            <tr><th>Module</th><th>Owns</th><th>Always available?</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>types</code></td>
+              <td><code>VarId</code>, <code>Lit</code>, <code>SolverStatus</code>, <code>IlpVarId</code>, <code>Sense</code>, <code>ObjDir</code></td>
+              <td>Yes</td>
+            </tr>
+            <tr>
+              <td><code>sat</code></td>
+              <td><code>SatSolver</code> trait</td>
+              <td>Yes</td>
+            </tr>
+            <tr>
+              <td><code>ilp</code></td>
+              <td><code>IlpSolver</code> trait</td>
+              <td>Yes</td>
+            </tr>
+            <tr>
+              <td><code>mus</code></td>
+              <td><code>extract_mus</code>, <code>MusResult</code></td>
+              <td>Yes</td>
+            </tr>
+            <tr>
+              <td><code>mcs</code></td>
+              <td><code>enumerate_mcs</code></td>
+              <td>Yes</td>
+            </tr>
+            <tr>
+              <td><code>builders</code></td>
+              <td>At-most-one, exactly-one, cardinality, implication helpers</td>
+              <td>Yes</td>
+            </tr>
+            <tr>
+              <td><code>enumerate</code></td>
+              <td><code>ExhaustiveEnumerator</code> (all-SAT)</td>
+              <td>Yes</td>
+            </tr>
+            <tr>
+              <td><code>backend::exhaustive</code></td>
+              <td><code>ExhaustiveSatSolver</code></td>
+              <td>Yes</td>
+            </tr>
+            <tr>
+              <td><code>backend::cadical</code></td>
+              <td><code>CadicalSolver</code></td>
+              <td>Feature: <code>cadical</code></td>
+            </tr>
+            <tr>
+              <td><code>backend::highs</code></td>
+              <td><code>HighsSolver</code></td>
+              <td>Feature: <code>highs</code></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h2 id="status">Implementation status</h2>
+        <p>
+          This is a design reference. To stay honest about what exists:
+        </p>
+        <table>
+          <thead>
+            <tr><th>Surface</th><th>Today</th><th>Target</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Crate</td>
+              <td><code>crates/solver</code> is a scaffold with a <code>Cargo.toml</code> and an empty <code>lib.rs</code></td>
+              <td>Full trait definitions, exhaustive backend, MUS/MCS algorithms, convenience builders</td>
+            </tr>
+            <tr>
+              <td>SAT trait</td>
+              <td>Not implemented</td>
+              <td><code>SatSolver</code> trait with <code>new_var</code>, <code>add_clause</code>, <code>solve</code>, <code>solve_under_assumptions</code>, <code>model</code>, <code>unsat_core</code></td>
+            </tr>
+            <tr>
+              <td>ILP trait</td>
+              <td>Not implemented</td>
+              <td><code>IlpSolver</code> trait with <code>new_var</code>, <code>add_constraint</code>, <code>set_objective</code>, <code>solve</code>, <code>solution</code>, <code>objective_value</code></td>
+            </tr>
+            <tr>
+              <td>Exhaustive backend</td>
+              <td>Not implemented</td>
+              <td>Brute-force 2<sup>n</sup> SAT solver for &lt;20 variables, always available</td>
+            </tr>
+            <tr>
+              <td>MUS extraction</td>
+              <td>Not implemented</td>
+              <td>Deletion-based algorithm with budget gating</td>
+            </tr>
+            <tr>
+              <td>MCS enumeration</td>
+              <td>Not implemented</td>
+              <td>Blocking-clause enumeration up to <code>max_count</code></td>
+            </tr>
+            <tr>
+              <td>Builders</td>
+              <td>Not implemented</td>
+              <td>At-most-one, exactly-one, cardinality, implication helpers</td>
+            </tr>
+            <tr>
+              <td>CaDiCaL backend</td>
+              <td>Not implemented</td>
+              <td>Feature-gated CaDiCaL wrapper</td>
+            </tr>
+            <tr>
+              <td>HiGHS backend</td>
+              <td>Not implemented</td>
+              <td>Feature-gated HiGHS wrapper</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="note danger">
+          <strong>Soundness boundary.</strong> The solver crate provides
+          <em>interfaces</em> and <em>algorithms</em> — it does not make
+          correctness claims about the layout. A SAT result of
+          <code>Sat</code> means the Boolean encoding is satisfiable, not that
+          the physical layout is legal. The consumer crate is responsible for
+          encoding the problem correctly. The solver crate's contract is:
+          given a correct encoding, the solver returns a correct answer (or
+          <code>Unknown</code>/<code>Timeout</code> if it cannot determine one).
+          Bugs in the encoding are consumer bugs, not solver bugs.
+        </div>
+
+        <p>
+          <strong>Full implementation plan:</strong>
+          <a href="https://github.com/OmarSiwy/Philis/blob/main/crates/solver/PLAN.md"><code>crates/solver/PLAN.md</code></a>
+        </p>
+      </main>
+    </div>
+
+    <footer class="site-footer">Philis &middot; Analog Layout Engine</footer>
+      <script src="../../nav.js"></script>
+  </body>
+</html>

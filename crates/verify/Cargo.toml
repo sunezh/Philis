@@ -1,0 +1,14 @@
+[package]
+name = "philis-verify"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "DRC, LVS, and PEX verification engine for the Philis analog layout engine"
+license = "MIT"
+
+[lib]
+name = "philis_verify"
+
+[dependencies]
+philis-geom = { path = "../geom" }
+philis-tech = { path = "../tech" }

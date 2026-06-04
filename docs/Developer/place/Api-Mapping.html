@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Placement API Mapping &amp; Stubs — Philis</title>
+    <link rel="stylesheet" href="../../style.css" />
+    <link rel="icon" type="image/svg+xml" href="../../brand.svg" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../../index.html">
+        <img src="../../brand.svg" alt="Philis" />
+        Philis
+      </a>
+      <nav class="top-nav">
+        <a href="../../index.html">Home</a>
+        <a href="../../Usage/getting-started.html">Usage</a>
+        <a href="../api/index.html" class="active">Developer</a>
+        <a href="https://github.com/OmarSiwy/Philis">GitHub</a>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <h4>Developer</h4>
+        <ul>
+          <li><a href="../api/index.html">API</a></li>
+          <li><a href="../geom/index.html">Geometry</a></li>
+          <li><a href="../tech/index.html">Technology</a></li>
+          <li><a href="../verify/index.html">Verify</a></li>
+          <li><a href="../solver/index.html">Solver</a></li>
+          <li>
+            <a href="../place/index.html" class="active">Place</a>
+          </li>
+          <li><a href="../route/index.html">Route</a></li>
+          <li><a href="../constraints/index.html">Constraints</a></li>
+        </ul>
+        <h4>Place</h4>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="Signoff-First-Placement.html">Signoff-First Placement</a></li>
+          <li><a href="Placement-Algorithms.html">Placement Algorithms</a></li>
+          <li><a href="Api-Mapping.html" class="active">API Mapping</a></li>
+        </ul>
+        <h4>Usage</h4>
+        <ul>
+          <li>
+            <a href="../../Usage/getting-started.html">Getting Started</a>
+          </li>
+          <li><a href="../../Usage/installation.html">Installation</a></li>
+        </ul>
+      </aside>
+
+      <main class="content">
+        <p class="breadcrumb">
+          <a href="../../index.html">Home</a> / Developer /
+          <a href="index.html">Place</a> / API Mapping &amp; Stubs
+        </p>
+
+        <h1>Placement API Mapping &amp; Stubs</h1>
+        <p>
+          This page ties the
+          <a href="Signoff-First-Placement.html">signoff-first formulation</a> to
+          the concrete Philis surface — the <code>philis</code> crate
+          (<a href="https://github.com/OmarSiwy/Philis/tree/main/crates/api"><code>crates/api</code></a>)
+          — and states precisely, identifier by identifier, what is real today
+          versus a documented stub. It is the placement counterpart of the
+          router's <a href="../route/Api-Mapping.html">API Mapping page</a>, and it
+          is the most exacting of the four placement pages: every type and method
+          named below was read out of the source, not paraphrased from the paper.
+          The honesty rule from the
+          <a href="../api/General-API-Design.html">API design rules</a> applies
+          verbatim — the one defect the design forbids is an API that
+          <strong>accepts input it silently discards</strong>.
+        </p>
+
+        <div class="note">
+          <strong>Where the placement contract lives.</strong> The signoff-first
+          placement vocabulary lives in
+          <a href="https://github.com/OmarSiwy/Philis/blob/main/crates/api/src/core.rs"><code>crates/api/src/core.rs</code></a>,
+          in the <em>Signoff-first placement contract</em> section that sits
+          alongside the stage oracles and the routing contract in the same module.
+          It is re-exported flat at the crate root as <code>philis::*</code> and,
+          mirroring the eventual split into separate engine crates, under the
+          <code>philis::placer</code> and <code>philis::next::placer</code>
+          namespaces. The stage oracle is <code>core::run_placement</code>.
+          Crucially, the placement contract <em>shares</em> routing's canonical
+          signoff vocabulary — <code>Coverage</code>, <code>PdkState</code>,
+          <code>RuleCoverageReport</code>, and <code>DiagnosticScope</code> are all
+          defined once (in the routing-contract part of <code>core.rs</code>) and
+          reused by placement.
+        </div>
+
+        <div class="note warn">
+          <strong>The gate evaluator is a stub; results are
+          degraded-confidence.</strong> The contract <em>types</em> are real and
+          unit-tested, but the gate <em>evaluator</em>, the typed oracles
+          (drc / equivalence / access / routability), the hybrid solver, and
+          group-preserving legalization are all stubs.
+          <code>run_placement</code> emits
+          <code>PlacementCertificate::stub()</code>: every acceptance gate is
+          <code>GateStatus::Degraded</code>, <code>pdk_state</code> is the
+          conservative <code>PdkState::SparseResearch</code>, and
+          <code>degraded_confidence = true</code>. A stub result is therefore
+          signoff-ready <em>shaped</em> but can <strong>never</strong> be mistaken
+          for signoff-quality. The full ledger is
+          <a href="https://github.com/OmarSiwy/Philis/blob/main/crates/api/STUBS.md"><code>crates/api/STUBS.md</code></a>.
+        </div>
+
+        <hr />
+
+        <h2>1. Overview</h2>
+        <p>
+          A signoff-first placer returns <strong>geometry plus a
+          machine-checkable certificate</strong>, never geometry alone, and
+          acceptance is a lexicographic hierarchy of hard <em>gates</em> —
+          technology coverage → local DRC → device equivalence → terminal access
+          → routability → intent satisfaction — gated before any soft objective
+          (area, HPWL, parasitics). In Philis this contract is a sibling of the
+          routing contract in the same <code>core.rs</code> module, and it
+          deliberately reuses routing's canonical
+          <code>Coverage</code> / <code>PdkState</code> /
+          <code>RuleCoverageReport</code> / <code>DiagnosticScope</code>
+          vocabulary so that the constraints layer owns one signoff lexicon and
+          placement and routing share it. The current state is shape-real,
+          behavior-stub: the typed surface is complete and exercised by tests
+          (<code>placement_tests</code> in <code>core.rs</code>), while the engine
+          that would <em>prove</em> the certificate's contents is the stub
+          <code>run_placement</code>.
+        </p>
+
+        <h2>2. The paper's conceptual types → the realized Philis surface</h2>
+        <p>
+          The research formulation is written against a sibling workspace's crate
+          (<code>crates/placer2</code>). The table maps its load-bearing shapes
+          onto the Philis types that exist in <code>core.rs</code> today. Field
+          lists are reproduced exactly from the source.
+        </p>
+        <table>
+          <thead>
+            <tr><th>Paper concept</th><th>Realized Philis surface</th><th>Status</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>PlacementRunInput2 { pdk, netlist, constraints, host, seed }</code></td>
+              <td><code>philis::PlacementRunInput</code> — today just <code>{ device_count: usize }</code> — plus the <code>Pdk</code> / <code>SpiceNetlist</code> / <code>Constraint</code> / <code>RunConfig</code> inputs threaded by the flow façade</td>
+              <td>Partial</td>
+            </tr>
+            <tr>
+              <td><code>PlacementRunOutput2 { candidate, handoff, certificate, conflicts }</code></td>
+              <td><code>philis::PlacementResult { placed_count, baseline_used, certificate }</code> plus the assembled <code>Layout</code></td>
+              <td>Partial (geometry stubbed)</td>
+            </tr>
+            <tr>
+              <td><code>PlacementCertificate</code> (12+ fields)</td>
+              <td><code>philis::PlacementCertificate { problem_hash, pdk_oracle_hash, pdk_state, gates, coverage, degraded_confidence, degraded_causes, handoff, infeasible_core, solver_path, seed }</code></td>
+              <td>shape Coded / contents stub</td>
+            </tr>
+            <tr>
+              <td><code>RouterHandoffWitness</code></td>
+              <td><code>philis::RouterHandoffWitness { has_access_map, reserved_channel_count, terminal_count, host_pin_count, obstruction_count, note }</code></td>
+              <td>shape Coded / contents stub</td>
+            </tr>
+            <tr>
+              <td>acceptance gates</td>
+              <td><code>philis::AcceptanceGate</code> + <code>philis::ACCEPTANCE_GATE_ORDER</code> + <code>philis::evaluate_gate_acceptance</code></td>
+              <td>Coded</td>
+            </tr>
+            <tr>
+              <td>obligation classes</td>
+              <td><code>philis::IntentClass</code> + <code>Constraint::intent_class()</code></td>
+              <td>Partial (4 of 7 canonical)</td>
+            </tr>
+            <tr>
+              <td>conflict core</td>
+              <td><code>philis::PlacementConflict</code> + <code>philis::ConflictClass</code></td>
+              <td>Partial (minimality not proved)</td>
+            </tr>
+            <tr>
+              <td><code>CompiledPlacementTechnology</code>, <code>IntentGraph</code>, <code>PrimitiveCatalog</code>, <code>HostLayoutContract</code>, <code>PlacementProblem</code></td>
+              <td><em>not yet present as Philis types</em></td>
+              <td>Missing / target</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          The four <em>Missing / target</em> shapes in the last row are the
+          aspirational engine types. They are named in the
+          <a href="index.html">pipeline overview</a> but have no Rust
+          representation in <code>crates/api</code> today; do not reach for them in
+          code.
+        </p>
+
+        <h2>3. The acceptance gates in code</h2>
+        <p>
+          <code>philis::AcceptanceGate</code> is a six-variant
+          <code>#[non_exhaustive]</code> enum, and
+          <code>philis::ACCEPTANCE_GATE_ORDER</code> is the
+          <code>[AcceptanceGate; 6]</code> array giving the <em>realized</em>
+          evaluation order (which differs from the design-rationale order — see the
+          <a href="index.html#hierarchy">overview</a>):
+        </p>
+        <pre><code>pub const ACCEPTANCE_GATE_ORDER: [AcceptanceGate; 6] = [
+    AcceptanceGate::TechnologyCoverage,
+    AcceptanceGate::LocalDrc,
+    AcceptanceGate::DeviceEquivalence,
+    AcceptanceGate::TerminalAccess,
+    AcceptanceGate::Routability,
+    AcceptanceGate::IntentSatisfaction,
+];</code></pre>
+        <p>
+          Each gate carries <code>AcceptanceGate::name() -&gt; &amp;'static str</code>
+          (the exact string used in the certificate) and
+          <code>AcceptanceGate::is_repairable() -&gt; bool</code>, which is
+          <code>true</code> for <strong>only</strong> <code>LocalDrc</code> and
+          <code>IntentSatisfaction</code> — group-preserving legalization can
+          re-snap geometry and re-mirror a symmetry pair, but it cannot conjure a
+          missing rule deck, device generator, terminal-access set, or channel
+          capacity, so the other four gates fail terminally. A gate's verdict is a
+          <code>GateStatus { Pass, Degraded, Fail }</code> (default
+          <code>Degraded</code> — a gate with no evidence is degraded, not
+          passing), and one gate's evaluation is a
+          <code>GateEvaluation { gate, status, evidence }</code> where
+          <code>evidence</code> is a <code>String</code>.
+        </p>
+        <p>
+          The acceptance policy is the free function
+          <code>evaluate_gate_acceptance(gates: &amp;[GateEvaluation],
+          allow_repairable_failures: bool) -&gt; bool</code>. It is called
+          <em>twice</em> by the pipeline: pre-legalization with
+          <code>true</code> (a <code>Fail</code> on a repairable gate is recorded
+          as repair-pending, not a reject) and post-legalization with
+          <code>false</code> (any <code>Fail</code> is a hard reject).
+          <code>Degraded</code> never rejects.
+        </p>
+        <pre><code>use philis::{
+    AcceptanceGate, GateEvaluation, GateStatus,
+    ACCEPTANCE_GATE_ORDER, evaluate_gate_acceptance,
+    run_placement, PlacementRunInput,
+};
+
+// Build a gate vector (here: every gate passes on coded evidence).
+let gates: Vec&lt;GateEvaluation&gt; = ACCEPTANCE_GATE_ORDER
+    .iter()
+    .map(|&amp;gate| GateEvaluation {
+        gate,
+        status: GateStatus::Pass,
+        evidence: format!("{}: ok", gate.name()),
+    })
+    .collect();
+
+// Pre- and post-legalization acceptance under the repairable-failure policy.
+let accepted_pre = evaluate_gate_acceptance(&amp;gates, true);
+let accepted_post = evaluate_gate_acceptance(&amp;gates, false);
+assert!(accepted_pre &amp;&amp; accepted_post);
+
+// Only LocalDrc and IntentSatisfaction may be repaired before legalization.
+assert!(AcceptanceGate::LocalDrc.is_repairable());
+assert!(!AcceptanceGate::Routability.is_repairable());
+
+// The stub oracle: feasible-shaped but never signoff-quality.
+let result = run_placement(&amp;PlacementRunInput { device_count: 3 });
+let cert = &amp;result.certificate;
+assert!(cert.is_accepted());          // no hard fail
+assert!(!cert.is_signoff_quality());  // but degraded-confidence</code></pre>
+
+        <h2>4. The certificate &amp; router handoff in code</h2>
+        <p>
+          <code>philis::PlacementCertificate</code> is geometry's companion proof.
+          Its fields, exactly as declared:
+        </p>
+        <pre><code>pub struct PlacementCertificate {
+    pub problem_hash: u64,                          // hash of (T, S, H, M, C, O, B)
+    pub pdk_oracle_hash: u64,                        // hash of the compiled PDK oracle
+    pub pdk_state: PdkState,                          // shared with routing
+    pub gates: Vec&lt;GateEvaluation&gt;,                   // per-gate verdicts, in ACCEPTANCE_GATE_ORDER
+    pub coverage: RuleCoverageReport,                // per-class rule coverage
+    pub degraded_confidence: bool,                   // signoff-ready *shaped*, not quality
+    pub degraded_causes: Vec&lt;DegradedConfidenceCause&gt;,
+    pub handoff: RouterHandoffWitness,               // placement → routing contract
+    pub infeasible_core: Vec&lt;PlacementConflict&gt;,     // preserved unsat core on failure
+    pub solver_path: String,                         // e.g. "exact-&gt;analytical-&gt;legalize"
+    pub seed: Option&lt;u64&gt;,                            // placement is deterministic in its seed
+}</code></pre>
+        <p>
+          Two predicates read the certificate. <code>is_signoff_quality()</code>
+          is <code>true</code> <em>iff</em> the result is not degraded
+          <em>and</em> the gate vector is non-empty <em>and</em> every gate is
+          <code>GateStatus::Pass</code> — a genuine readiness claim.
+          <code>is_accepted()</code> is <code>true</code> iff no gate hard-failed
+          (it may still be degraded-confidence); it is exactly a
+          post-legalization <code>evaluate_gate_acceptance(&amp;self.gates, false)</code>.
+          The constructor <code>PlacementCertificate::stub()</code> is the honest
+          placeholder: it fills <code>gates</code> with every gate
+          <code>Degraded</code>, sets <code>pdk_state =
+          PdkState::SparseResearch</code>, <code>degraded_confidence = true</code>,
+          one <code>DegradedConfidenceCause</code> per gate (each with
+          <code>Coverage::Missing</code>), a <code>RouterHandoffWitness</code> with
+          the note <code>"engine stub — no access map"</code>, and
+          <code>solver_path = "baseline (stub)"</code>. So a stub certificate is
+          <code>is_accepted()</code> but not <code>is_signoff_quality()</code>.
+        </p>
+        <p>
+          The router handoff is
+          <code>philis::RouterHandoffWitness</code> — the placement
+          <em>readiness witness</em> the router consumes, evidence that a route
+          toward DRC=0 / LVS=true is <em>reachable</em>, not the routed result:
+        </p>
+        <pre><code>pub struct RouterHandoffWitness {
+    pub has_access_map: bool,            // every terminal has &gt;= 1 access candidate
+    pub reserved_channel_count: usize,   // channels reserved for matched/shielded/critical nets
+    pub terminal_count: usize,           // schematic terminals with a typed access set
+    pub host_pin_count: usize,           // fixed host-interface pins as boundary conditions
+    pub obstruction_count: usize,        // obstruction snapshots (hash count for stability)
+    pub note: String,                    // human-readable note (degraded reason on a stub)
+}</code></pre>
+        <p>
+          A degraded cause is
+          <code>philis::DegradedConfidenceCause { gate: AcceptanceGate, reason:
+          String, coverage: Coverage }</code> — the gate that degraded, why, and
+          the coverage class of the evidence that was unavailable.
+        </p>
+        <p>
+          A finished <code>Layout</code> surfaces all of this without a
+          <code>.gds</code> dump. <code>Layout::certificate() -&gt;
+          &amp;PlacementCertificate</code> returns the placement certificate,
+          <code>Layout::router_handoff() -&gt; &amp;RouterHandoffWitness</code>
+          returns its <code>handoff</code> field, and
+          <code>Layout::is_signoff_quality() -&gt; bool</code> forwards to the
+          certificate's predicate — so under the stub engine it is honestly
+          <code>false</code>.
+        </p>
+        <pre><code>let cert = layout.certificate();          // &amp;PlacementCertificate
+let handoff = layout.router_handoff();    // &amp;RouterHandoffWitness
+let ready = layout.is_signoff_quality();  // false under the stub engine</code></pre>
+
+        <h2>5. Intent classes &amp; the Constraint taxonomy</h2>
+        <p>
+          <code>philis::IntentClass</code> is how strongly the engine must honor an
+          analog-intent obligation. The canonical <code>ObligationClass</code> owned
+          by the constraints layer has seven members
+          (<code>Hard | Joint | Bounded | Soft | Unsupported | ExternalOnly |
+          ManualReview</code>); the realized engine encodes <strong>four</strong>:
+        </p>
+        <pre><code>pub enum IntentClass { Hard, Bounded, Soft, Unsupported }
+
+impl IntentClass {
+    pub const fn tag(self) -&gt; &amp;'static str { /* "hard" | "bounded" | "soft" | "unsupported" */ }
+    pub const fn is_gate(self) -&gt; bool { matches!(self, IntentClass::Hard) }  // only Hard is a gate
+}</code></pre>
+        <p>
+          <code>Constraint::intent_class()</code> lowers the
+          <a href="../constraints/index.html">constraint taxonomy</a> onto these
+          classes:
+        </p>
+        <table>
+          <thead><tr><th><code>Constraint</code> variants</th><th><code>IntentClass</code></th></tr></thead>
+          <tbody>
+            <tr><td><code>Symmetric</code>, <code>SelfSymmetric</code>, <code>SymmetricGroup</code>, <code>Order</code>, <code>Align</code>, <code>GuardRing</code></td><td><code>Hard</code> (a gate — a violation is electrically wrong)</td></tr>
+            <tr><td><code>Matching</code>, <code>DistanceConstraint</code></td><td><code>Bounded</code> (admissible only inside a numerical tolerance)</td></tr>
+            <tr><td><code>NetShield</code>, <code>SetNetClass</code></td><td><code>Soft</code> (optimized only after every hard gate passes)</td></tr>
+            <tr><td>the 12 engine-unsupported variants (<code>SignalFlow</code>, <code>AspectRatio</code>, <code>CellBoundary</code>, <code>FixPosition</code>, <code>PlaceOnGrid</code>, <code>PlaceOnBoundary</code>, <code>Group</code>, <code>PortLocation</code>, <code>NetMatch</code>, <code>MultiWire</code>, <code>DoNotRoute</code>, <code>ChargeFlow</code>)</td><td><code>Unsupported</code></td></tr>
+          </tbody>
+        </table>
+        <p>
+          The <code>Unsupported</code> set is exactly the complement of
+          <code>Constraint::is_engine_supported()</code>, and it is precisely the
+          set that the builder surfaces as
+          <code>BuildWarning::UnsupportedConstraint(kind)</code> at build time.
+          That is the honesty property: an engine-unsupported constraint lowers to
+          <code>IntentClass::Unsupported</code> and is <strong>reported, never
+          silently dropped</strong>.
+        </p>
+
+        <h2>6. The conflict core in code</h2>
+        <p>
+          A typed conflict is
+          <code>philis::PlacementConflict { class, scope, message, subjects,
+          predicates }</code> — the placement analog of routing's
+          <code>RouteDiagnostic</code>. It carries the implicated instances/groups
+          (<code>subjects: Vec&lt;String&gt;</code>, the minimal repair seed) and the
+          violated rule / intent IDs (<code>predicates: Vec&lt;String&gt;</code>).
+          Its <code>scope</code> reuses routing's
+          <code>DiagnosticScope { LocalRepairable, GlobalInfeasible,
+          UnprovenTimeout }</code>. Its <code>class</code> is the eight-variant
+          <code>ConflictClass</code>, and <code>ConflictClass::gate()</code> names
+          the gate each is blamed against:
+        </p>
+        <table>
+          <thead><tr><th><code>ConflictClass</code></th><th><code>ConflictClass::gate()</code></th></tr></thead>
+          <tbody>
+            <tr><td><code>CoverageGap</code></td><td><code>AcceptanceGate::TechnologyCoverage</code></td></tr>
+            <tr><td><code>PdkRule</code>, <code>HostInterface</code></td><td><code>AcceptanceGate::LocalDrc</code></td></tr>
+            <tr><td><code>DeviceEquivalence</code></td><td><code>AcceptanceGate::DeviceEquivalence</code></td></tr>
+            <tr><td><code>TerminalAccess</code></td><td><code>AcceptanceGate::TerminalAccess</code></td></tr>
+            <tr><td><code>Capacity</code>, <code>ParasiticBudget</code></td><td><code>AcceptanceGate::Routability</code></td></tr>
+            <tr><td><code>IntentViolation</code></td><td><code>AcceptanceGate::IntentSatisfaction</code></td></tr>
+          </tbody>
+        </table>
+        <p>
+          On an infeasible problem the conflict set is preserved as the
+          certificate's <code>infeasible_core: Vec&lt;PlacementConflict&gt;</code>
+          rather than reported as a bare "placement failed". Minimality of that
+          core is not yet proved (see the roadmap).
+        </p>
+
+        <h2>7. The shared signoff vocabulary</h2>
+        <p>
+          The placement contract does <em>not</em> own a parallel coverage lexicon.
+          <code>Coverage</code> (nine variants: <code>Coded</code>,
+          <code>Partial</code>, <code>Approximate</code>,
+          <code>ExternalOnly</code>, <code>ManualReview</code>,
+          <code>RecommendedOnly</code>, <code>Unsupported</code>,
+          <code>Missing</code>, <code>Contradictory</code>),
+          <code>PdkState</code> (four: <code>FullSignoff</code>,
+          <code>AbstractComplete</code>, <code>SparseResearch</code>,
+          <code>ContradictoryOrMissing</code>), and <code>RuleCoverageReport</code>
+          are all <strong>defined in the routing-contract part of
+          <code>core.rs</code></strong> and reused by placement
+          (<code>DegradedConfidenceCause::coverage</code> and
+          <code>PlacementCertificate::{pdk_state, coverage}</code> are these very
+          types). One canonical source — matching the paper's "constraints layer
+          owns the vocabulary, placement and routing share it." All of these names
+          are re-exported flat at the crate root as <code>philis::Coverage</code>,
+          <code>philis::PdkState</code>, etc.
+        </p>
+
+        <h2>8. The verify seam</h2>
+        <p>
+          <code>philis::verify::{drc, lvs, pex, erc}</code> and the matching
+          <code>Layout::{drc, lvs, pex, erc}</code> methods are callable at any
+          tier, reading the netlist together with the incrementally-built GDS — no
+          <code>.gds</code> dump required (<code>Layout</code> calls
+          <code>verify::drc(&amp;self.netlist, Some(&amp;self.gds))</code> and
+          friends). Each returns a <code>CheckReport</code> (with
+          <code>is_clean()</code> / <code>findings()</code> and a
+          <code>CheckKind</code>). Today they return clean reports: the harness,
+          report shape, and call sites are real, but there are no rule decks.
+        </p>
+        <p>
+          This is the load-bearing separation of duties: <strong>placement emits
+          readiness witnesses</strong> (the <code>RouterHandoffWitness</code>, the
+          gate verdicts, the degraded-confidence causes), while final DRC=0 and
+          LVS=true belong to <em>verification</em>. A
+          <code>PlacementCertificate</code> proves only facts owned by placement
+          and checked by declared oracles — it is not a foundry-signoff substitute.
+        </p>
+
+        <h2>9. Roadmap to de-stub the placer</h2>
+        <ol>
+          <li>Expose the bipartite device/net hypergraph from <code>io::spice</code> and feed it to the engine (<code>core::run_flow</code> notes where it plugs in).</li>
+          <li>Compile a real <code>CompiledPlacementTechnology</code> and widen the stub's coverage classification to the full canonical <code>Coverage</code> enum.</li>
+          <li>Replace <code>run_placement</code> with the real gate evaluator plus the typed oracles (drc / equivalence / access / routability), so gate verdicts become <code>GateStatus::Pass</code> on coded evidence instead of <code>Degraded</code>.</li>
+          <li>Wire the hybrid solver (exact group packer + analytical centering) and group-preserving legalization so geometry flows into <code>Layout</code> and the incremental <code>Gds</code>.</li>
+          <li>Add the <code>Joint</code> / <code>ExternalOnly</code> / <code>ManualReview</code> obligation classes (the missing three of the canonical seven) and a real <code>IntentGraph</code>.</li>
+          <li>Land PEX / EM / LDE / thermal oracles, or declare them <code>ExternalOnly</code> coverage explicitly.</li>
+          <li>Prove conflict-core minimality so an <code>infeasible_core</code> is a smallest unsatisfied set, not merely a preserved one.</li>
+        </ol>
+        <p>
+          Each step closes a row in
+          <a href="https://github.com/OmarSiwy/Philis/blob/main/crates/api/STUBS.md"><code>crates/api/STUBS.md</code></a>
+          and removes a degraded-confidence marker — never a silently-ignored
+          input. The certificate shape and the gate hierarchy do not change as the
+          engine lands; only their <em>contents</em> graduate from stub to proven.
+        </p>
+      </main>
+    </div>
+
+    <footer class="site-footer">Philis &middot; Analog Layout Engine</footer>
+      <script src="../../nav.js"></script>
+  </body>
+</html>

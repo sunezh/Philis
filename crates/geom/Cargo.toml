@@ -1,0 +1,13 @@
+[package]
+name = "philis-geom"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "Integer geometry kernel for the Philis analog layout engine"
+license = "MIT"
+
+[lib]
+name = "philis_geom"
+
+[dependencies]
+rstar = "0.12"

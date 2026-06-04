@@ -1,0 +1,668 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Signoff-First Placement — Philis</title>
+    <link rel="stylesheet" href="../../style.css" />
+    <link rel="icon" type="image/svg+xml" href="../../brand.svg" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../../index.html">
+        <img src="../../brand.svg" alt="Philis" />
+        Philis
+      </a>
+      <nav class="top-nav">
+        <a href="../../index.html">Home</a>
+        <a href="../../Usage/getting-started.html">Usage</a>
+        <a href="../api/index.html" class="active">Developer</a>
+        <a href="https://github.com/OmarSiwy/Philis">GitHub</a>
+      </nav>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <h4>Developer</h4>
+        <ul>
+          <li><a href="../api/index.html">API</a></li>
+          <li><a href="../geom/index.html">Geometry</a></li>
+          <li><a href="../tech/index.html">Technology</a></li>
+          <li><a href="../verify/index.html">Verify</a></li>
+          <li><a href="../solver/index.html">Solver</a></li>
+          <li>
+            <a href="../place/index.html" class="active">Place</a>
+          </li>
+          <li><a href="../route/index.html">Route</a></li>
+          <li><a href="../constraints/index.html">Constraints</a></li>
+        </ul>
+        <h4>Place</h4>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="Signoff-First-Placement.html" class="active">Signoff-First Placement</a></li>
+          <li><a href="Placement-Algorithms.html">Placement Algorithms</a></li>
+          <li><a href="Api-Mapping.html">API Mapping</a></li>
+        </ul>
+        <h4>Usage</h4>
+        <ul>
+          <li>
+            <a href="../../Usage/getting-started.html">Getting Started</a>
+          </li>
+          <li><a href="../../Usage/installation.html">Installation</a></li>
+        </ul>
+      </aside>
+
+      <main class="content">
+        <p class="breadcrumb">
+          <a href="../../index.html">Home</a> / Developer /
+          <a href="index.html">Place</a> / Signoff-First Problem
+        </p>
+
+        <h1>The Signoff-First Placement Problem</h1>
+        <p>
+          This page is the formal specification the Philis placer is built
+          against. It is the implementable form of
+          <code>papers/placement/spout-placement-problem-setup.md</code> — "A
+          Signoff-First, PDK-Aware Problem Formulation and Certificate Contract
+          for Analog Placement" — with every symbol tied to a Philis type where
+          one exists (see <a href="Api-Mapping.html">API Mapping &amp; Stubs</a>).
+          Placement is the upstream sibling of the
+          <a href="../route/index.html">router</a>: the two share one canonical
+          signoff vocabulary, and the placer's
+          <code>RouterHandoffWitness</code> is exactly the readiness evidence the
+          router consumes.
+        </p>
+
+        <div class="note">
+          <strong>What is ideal and what is real.</strong> This page describes
+          the <em>ideal formulation</em> — the contract the placement engine must
+          satisfy. The realized Philis engine is a <strong>stub</strong>: the
+          contract <em>types</em> (in
+          <a href="https://github.com/OmarSiwy/Philis/blob/main/crates/api/src/core.rs"><code>crates/api/src/core.rs</code></a>)
+          are real and unit-tested, but the gate <em>evaluator</em> that proves
+          their contents is not wired —
+          <code>philis::run_placement</code> emits
+          <code>philis::PlacementCertificate::stub()</code>, every gate
+          <code>Degraded</code>. Throughout, <code>philis::…</code> identifiers
+          name things that exist <em>now</em>; everything else is labelled
+          <em>target</em> / <em>conceptual</em>. The precise stub ledger is
+          <a href="https://github.com/OmarSiwy/Philis/blob/main/crates/api/STUBS.md"><code>crates/api/STUBS.md</code></a>.
+        </div>
+
+        <hr />
+
+        <h2 id="statement">1. Problem statement</h2>
+        <p>
+          Given a schematic netlist, a design hierarchy, a PDK bundle, a
+          primitive/generator library, a host template or fixed-GDS shell, any
+          fixed geometry, and explicit-plus-inferred design intent, produce
+          <strong>placed device geometry together with a machine-checkable
+          certificate</strong> such that:
+        </p>
+        <ol>
+          <li>
+            every primitive is generated from a PDK-supported,
+            <strong>LVS-equivalent</strong> device;
+          </li>
+          <li>
+            every transform, orientation, row/fin-site, well, implant, guard,
+            tap, dummy, abutment, and keepout is <strong>PDK-legal</strong>;
+          </li>
+          <li>there is <strong>no placement-level DRC violation</strong>;</li>
+          <li>
+            every terminal has a legal, typed <strong>access map</strong> and a
+            routable access pattern, <em>or</em> the problem is reported
+            infeasible;
+          </li>
+          <li>
+            every fixed host-interface object (padframe, tile pins, rails,
+            hard-macro pins, seal rings) is treated as an
+            <strong>immutable boundary</strong>;
+          </li>
+          <li>all required analog intent is satisfied or diagnosed;</li>
+          <li>
+            there is enough <strong>routability and parasitic margin</strong>
+            for a router to reach DRC=0 / LVS=true;
+          </li>
+          <li>
+            an infeasible case returns an <strong>unsatisfied-core
+            diagnosis</strong>, not a guessed placement.
+          </li>
+        </ol>
+        <p>
+          The certificate is the placement's companion proof: a result is
+          auditable rather than anecdotal precisely because every claim above is
+          backed by an evidence-carrying oracle, and a failure preserves its
+          conflict core rather than reporting a bare "placement failed".
+        </p>
+
+        <h2 id="inputs">2. The input tuple</h2>
+        <pre><code>I = (T, S, H, G, M, C, O, B)</code></pre>
+        <ul>
+          <li><code>T</code> — the compiled <a href="#technology">technology model</a>.</li>
+          <li>
+            <code>S = (D, N, ports)</code> — the schematic graph of devices
+            <code>D</code>, nets <code>N</code>, and terminals.
+          </li>
+          <li><code>H</code> — the design hierarchy graph (subcircuits, repeated blocks, reuse).</li>
+          <li>
+            <code>G</code> — the primitive source catalog: PCells / parameterized
+            generators, templates, imported cells, black boxes, and fixed
+            geometry.
+          </li>
+          <li><code>M</code> — the <a href="#host">host layout contract</a>.</li>
+          <li>
+            <code>C</code> — explicit plus inferred constraints, lowered into the
+            <a href="#intent">IntentGraph</a>.
+          </li>
+          <li>
+            <code>O</code> — obstacles / keepouts / wells / guards / pads /
+            seal-rings / reserved routes.
+          </li>
+          <li>
+            <code>B</code> — the budget vector: runtime, memory, area, parasitic
+            bounds, EM/noise margins, allowed degraded behavior, and external
+            signoff hooks.
+          </li>
+        </ul>
+
+        <h2 id="technology">3. The compiled technology model</h2>
+        <p>
+          The PDK compiler is the critical boundary: it turns process-specific
+          data into stable, typed <em>oracles</em>. The
+          <strong>target</strong> <code>CompiledPlacementTechnology</code> is the
+          ten-tuple
+        </p>
+        <pre><code>T = (U, L, R, P, A, X, K, D, Q)</code></pre>
+        <ul>
+          <li>
+            <code>U</code> — units, manufacturing grid, placement lattice, row
+            sites, fin pitch, legal rotations + reflections, color masks.
+          </li>
+          <li>
+            <code>L</code> — layer roles: active, poly, local interconnect,
+            metals, wells, implants, markers, vias, RDL, pad, inductor / resistor
+            / capacitor, keepout.
+          </li>
+          <li>
+            <code>R</code> — placement-relevant rule predicates: spacing,
+            enclosure, overlap, min-area, notch, well/tap distance, latch-up, HV
+            isolation, density, coloring, row/fin, antenna preconditions, region
+            restrictions.
+          </li>
+          <li>
+            <code>P</code> — the primitive catalog: legal variants, generated
+            geometry, terminal maps, parameter-equivalence proofs, local-DRC
+            evidence.
+          </li>
+          <li>
+            <code>A</code> — the abutment / sharing algebra: diffusion / dummy /
+            guard sharing, well merging, tap reuse, via-in-pin, same-template
+            copy.
+          </li>
+          <li>
+            <code>X</code> — the extraction model: device equivalence plus early
+            parasitic / LDE prediction.
+          </li>
+          <li>
+            <code>K</code> — the routability model: pin-access candidates,
+            track/via resources, channel capacity, preferred directions, blockage
+            effects.
+          </li>
+          <li><code>D</code> — the DFM / fill / CMP / litho model.</li>
+          <li>
+            <code>Q</code> — the rule/deck coverage inventory, keyed by at least
+            <code>(rule_id, device_or_layer_scope, corner, mode, deck_id,
+            host_template_id)</code>.
+          </li>
+        </ul>
+        <div class="note">
+          <strong>Realized.</strong> The conceptual
+          <code>CompiledPlacementTechnology</code> is the target; today the
+          realized engine is a stub. Its <em>readiness</em> rollup, however, is a
+          real type: <code>philis::PdkState</code>
+          (<code>FullSignoff | AbstractComplete | SparseResearch |
+          ContradictoryOrMissing</code>), classified conservatively from the
+          per-predicate <a href="#coverage">coverage</a> buckets and the
+          structural sanity of layers/tracks/vias. A stub PDK is
+          <code>SparseResearch</code>.
+        </div>
+
+        <h2 id="host">4. The host layout contract</h2>
+        <p>The <strong>target</strong> host contract is</p>
+        <pre><code>M = (frame, outline, fixed_pins, fixed_nets, rails, padframe,
+     seal_ring, wrappers, obstructions, reserved_layers, export_rules)</code></pre>
+        <ul>
+          <li><code>fixed_pins</code> are <strong>immutable</strong> — never moved to suit wirelength.</li>
+          <li><code>rails</code> carry continuity rules across the block.</li>
+          <li>
+            <code>export_rules</code> cover LEF / GDS / DEF naming and shuttle
+            restrictions.
+          </li>
+        </ul>
+        <p>
+          A host template or fixed-GDS shell is a set of
+          <strong>boundary conditions, not suggestions</strong>. Realized today:
+          outline, fixed pins, and obstacles (rails / padframe / seal-ring /
+          export handled in simplified form). The fixed host-interface objects
+          respected by a run are surfaced as
+          <code>philis::RouterHandoffWitness::host_pin_count</code>, and a
+          conflict that would require altering one is classed
+          <code>philis::ConflictClass::HostInterface</code> (blamed against the
+          <code>LocalDrc</code> gate — see
+          <code>philis::ConflictClass::gate</code>).
+        </p>
+
+        <h2 id="intent">5. The IntentGraph</h2>
+        <p>
+          The constraints layer's symmetry, ordering, alignment, and
+          common-centroid projections are lowered into a deterministic
+          <strong>IntentGraph</strong>. The full <strong>target</strong> intent
+          vocabulary includes symmetry, ordering, alignment, common-centroid,
+          proximity, interdigitation, ratio-matching, same-template,
+          current-flow, parallel-current-path, system-signal-flow, differential
+          pairs, sensitive nets, shields, power / substrate domains, guard-rings,
+          taps, dummies, isolation, HV domains, RF classes, thermal groups,
+          host-IO binding, route reservations, and hierarchy. Each edge carries
+          an obligation class. A
+          <strong><code>CommonCentroidGroup</code></strong> (target) is a tuple
+          of unit-device assignments, allowed patterns, a dummy policy, and
+          parasitic-match budgets.
+        </p>
+        <div class="note">
+          <strong>Realized.</strong> The compiled <code>Constraint</code>
+          taxonomy (<code>philis::Constraint</code>) is lowered onto obligation
+          classes by <code>philis::Constraint::intent_class</code>. Engine-
+          unsupported variants map to <code>IntentClass::Unsupported</code> and
+          surface as <code>philis::BuildWarning::UnsupportedConstraint</code> —
+          never silently dropped. Widening the realized intent vocabulary
+          (current-flow, system-signal-flow, thermal groups, full centroid
+          groups) is target work tracked on the
+          <a href="index.html">overview</a>.
+        </div>
+
+        <h2 id="vocabulary">6. Obligation &amp; coverage vocabulary</h2>
+
+        <h3 id="obligation">ObligationClass</h3>
+        <p>
+          The <strong>canonical</strong> <code>ObligationClass</code>, owned by
+          the constraints layer, has seven members:
+        </p>
+        <table>
+          <tr><th>Class</th><th>Meaning</th></tr>
+          <tr><td><code>Hard</code></td><td>A violation is unacceptable — a gate failure.</td></tr>
+          <tr><td><code>Joint</code></td><td>Members move together (both sides of a symmetry pair); one side is never moved alone.</td></tr>
+          <tr><td><code>Bounded</code></td><td>Admissible only within an explicit numerical tolerance.</td></tr>
+          <tr><td><code>Soft</code></td><td>Optimized only after every hard gate passes.</td></tr>
+          <tr><td><code>Unsupported</code></td><td>Refused or reported degraded before solving.</td></tr>
+          <tr><td><code>ExternalOnly</code></td><td>An <em>evidence location</em>: blocks a signoff claim until an external deck supplies the evidence.</td></tr>
+          <tr><td><code>ManualReview</code></td><td>An <em>evidence location</em>: blocks a signoff claim until a human note supplies the evidence.</td></tr>
+        </table>
+        <p>
+          The <strong>realized</strong> Philis enum is the four-member
+          <code>philis::IntentClass { Hard, Bounded, Soft, Unsupported }</code>
+          (with <code>tag()</code> and <code>is_gate()</code> — only
+          <code>Hard</code> is a gate), mapped from the
+          <code>philis::Constraint</code> taxonomy by
+          <code>philis::Constraint::intent_class</code>. Closing the gap to the
+          canonical contract means adding <code>Joint</code>,
+          <code>ExternalOnly</code>, and <code>ManualReview</code>.
+        </p>
+
+        <h3 id="coverage">Coverage</h3>
+        <p>
+          <code>philis::Coverage</code> is <strong>realized</strong> with all
+          nine canonical members, shared verbatim with routing:
+        </p>
+        <pre><code>Coded | Partial | Approximate | ExternalOnly | ManualReview |
+RecommendedOnly | Unsupported | Missing | Contradictory</code></pre>
+        <p>
+          A rule reported with internal evidence but no required deck reads as
+          <em>signoff-ready, not signoff-quality</em>.
+          <code>Contradictory</code> triggers an early inconsistency core. The
+          per-predicate buckets roll up into
+          <code>philis::PdkState { FullSignoff, AbstractComplete,
+          SparseResearch, ContradictoryOrMissing }</code>, and the per-class
+          counts live in <code>philis::RuleCoverageReport</code> (whose
+          <code>count(Coverage)</code> and <code>as_map()</code> project the
+          legacy bucket names onto the canonical enum). The realized
+          <code>Coverage</code> enum is wider than the realized
+          <code>IntentClass</code> — coverage is the fully-built half of the
+          vocabulary.
+        </p>
+
+        <h2 id="variables">7. Decision variables</h2>
+        <p>The placer assigns, per device or block <code>i</code>:</p>
+        <table>
+          <tr><th>Variable</th><th>Decision</th></tr>
+          <tr><td><code>v_i</code></td><td>variant / folding / multiplicity / segmentation</td></tr>
+          <tr><td><code>g_i</code></td><td>generated geometry / imported implementation</td></tr>
+          <tr><td><code>r_i</code></td><td>region / row / fin-site / well / implant / isolation</td></tr>
+          <tr><td><code>o_i</code></td><td>orientation / mirror / rotation</td></tr>
+          <tr><td><code>(x_i, y_i)</code></td><td>lattice transform</td></tr>
+          <tr><td><code>p_it</code></td><td>terminal-access candidate for terminal <code>t</code></td></tr>
+          <tr><td><code>d_i</code></td><td>dummy / tap / guard companions</td></tr>
+          <tr><td><code>q_i</code></td><td>topological encoding</td></tr>
+        </table>
+        <p>And, per pair or group:</p>
+        <table>
+          <tr><th>Variable</th><th>Decision</th></tr>
+          <tr><td><code>a_ij</code></td><td>abutment / spacing / sharing between <code>i</code> and <code>j</code></td></tr>
+          <tr><td><code>s_k</code></td><td>symmetry axis</td></tr>
+          <tr><td><code>c_k</code></td><td>centroid pattern / unit assignment / dispersion</td></tr>
+          <tr><td><code>h_k</code></td><td>hierarchy / template reuse</td></tr>
+          <tr><td><code>w_k</code></td><td>well / guard / substrate topology</td></tr>
+          <tr><td><code>z_e</code></td><td>channel reservation</td></tr>
+          <tr><td><code>m_j</code></td><td>host-interface binding</td></tr>
+        </table>
+        <p>
+          The discrete skeleton (<code>v</code>, <code>o</code>, <code>r</code>,
+          <code>s</code>, <code>c</code>, <code>h</code>, <code>m</code>) is the
+          combinatorial heart; the continuous coordinates are centered and spaced
+          <em>after</em> the discrete choices are frozen.
+        </p>
+
+        <h2 id="feasibility">8. The hard feasibility constraint set</h2>
+        <p>Hard feasibility is the conjunction</p>
+        <pre><code>F = F_pdk ∧ F_device ∧ F_template ∧ F_place ∧ F_intent ∧ F_access ∧ F_signoff</code></pre>
+        <p>
+          Each conjunct is a typed <strong>oracle</strong> that reports
+          <em>facts-with-evidence</em>, not policy: it answers "does this
+          predicate hold, and what is the proof?" rather than "is this a good
+          placement?". The placer queries them during candidate generation and
+          repair, never as a late afterthought.
+        </p>
+        <table>
+          <tr><th>Oracle</th><th>Realized scope</th><th>Gap</th></tr>
+          <tr>
+            <td><strong>local-DRC</strong> (<code>F_place</code>)</td>
+            <td><code>Partial</code> — overlap, grid, outline, host-obstacle predicates</td>
+            <td>enclosure / well / implant / color rule families</td>
+          </tr>
+          <tr>
+            <td><strong>device-equivalence</strong> (<code>F_device</code>)</td>
+            <td><code>Partial</code> — class / model / terminal-order / bulk / W-L / multiplicity / folding</td>
+            <td>imported cells need trusted terminal + extraction maps</td>
+          </tr>
+          <tr>
+            <td><strong>terminal-access</strong> (<code>F_access</code>)</td>
+            <td><code>Partial</code> — the access set must be non-empty</td>
+            <td>full via-stack / obstruction families</td>
+          </tr>
+          <tr>
+            <td><strong>routability</strong> (part of <code>F_access</code>)</td>
+            <td><code>Partial</code> — channel reservations + capacity witnesses</td>
+            <td>congestion coupling</td>
+          </tr>
+        </table>
+        <p>
+          The target <strong>terminal-access oracle</strong> certifies, for each
+          terminal <code>t</code>, a non-empty access set:
+        </p>
+        <pre><code>Access(t) = { (point, layer, direction, via_stack,
+              enclosure_context, obstruction_hash, paired_group_id) }   ≠ ∅</code></pre>
+        <p>
+          <code>F_pdk</code> (the PDK is covered for the required classes) and
+          <code>F_template</code> (the host contract is respected) and
+          <code>F_intent</code> (hard analog intent holds) complete the set.
+          <code>F_signoff</code> — the electrical-margin conjunct — is the one
+          not yet served by any realized oracle.
+        </p>
+        <div class="note warn">
+          <strong>Missing oracles.</strong> The PEX / EM / noise / LDE / thermal
+          oracles are <code>Missing</code> today. They are what
+          <code>F_signoff</code> would feed; until they exist (or are declared
+          <code>ExternalOnly</code>), any result touching an electrical budget is
+          <code>degraded_confidence</code> and a
+          <code>philis::ConflictClass::ParasiticBudget</code> conflict can only be
+          raised on external evidence.
+        </div>
+
+        <h2 id="hierarchy">9. The lexicographic acceptance hierarchy</h2>
+        <p>
+          Hard feasibility is never traded for lower parasitics. Acceptance is a
+          stack of gates; the soft objective is compared only once every gate
+          holds. There are two orderings, and the distinction matters.
+        </p>
+        <pre><code>Design-rationale order  (how a designer reasons, most fundamental first)
+  G0  TechnologyCoverage   required PDK / host / rule coverage exists
+  G1  DeviceEquivalence    every device & imported cell is LVS-equivalent
+  G2  LocalDrc             placement-owned local DRC, non-overlap, host legality
+  G3  IntentSatisfaction   all hard analog intent (symmetry, order, centroid…)
+  G4  TerminalAccess +     every terminal has access; channels have capacity
+      Routability
+  G5  (bounded)            PEX / EM / noise / LDE / thermal envelopes  — ε-bound
+  R6  (soft)               parasitics, area, HPWL, density, DFM, runtime — weights
+
+Realized acceptance order  (philis::ACCEPTANCE_GATE_ORDER, enforced in code)
+  TechnologyCoverage → LocalDrc → DeviceEquivalence →
+  TerminalAccess → Routability → IntentSatisfaction</code></pre>
+        <p>
+          G0–G4 are <strong>hard gates</strong>; G5 is a
+          <strong>bounded</strong> ε-constraint; R6 is the <strong>soft</strong>
+          tail — the only place weights are permitted. The realized order
+          (<code>philis::ACCEPTANCE_GATE_ORDER</code>, six
+          <code>philis::AcceptanceGate</code> variants, each with
+          <code>name()</code> and <code>is_repairable()</code>) reshuffles two
+          gates on purpose:
+        </p>
+        <ul>
+          <li>
+            <strong><code>LocalDrc</code> precedes
+            <code>DeviceEquivalence</code></strong> because by this point the
+            geometry already exists, local DRC is the
+            <em>cheapest high-yield rejector</em>, and equivalence is
+            <em>invariant under legalization</em> — deferring it one slot costs
+            no soundness.
+          </li>
+          <li>
+            <strong><code>IntentSatisfaction</code> runs last</strong> because it
+            is the gate that is <em>repairable before legalization</em>: a
+            symmetry/centroid group can be re-mirrored, so it is the natural last
+            thing to settle.
+          </li>
+        </ul>
+        <p>
+          Only <code>LocalDrc</code> and <code>IntentSatisfaction</code> are
+          repairable (<code>philis::AcceptanceGate::is_repairable</code>); the
+          other four are <strong>terminal</strong> — a missing deck, generator,
+          access set, or channel capacity cannot be conjured by moving geometry.
+          The policy is
+          <code>philis::evaluate_gate_acceptance(gates,
+          allow_repairable_failures)</code>, called twice:
+        </p>
+        <pre><code>pre-legalization   evaluate_gate_acceptance(gates, true)
+                   // a Fail on a repairable gate is "repair-pending", not a reject
+post-legalization  evaluate_gate_acceptance(gates, false)
+                   // any Fail rejects; Degraded never rejects</code></pre>
+        <p>
+          The order governs <em>which violation is blamed first</em>, never
+          whether an accepted result is sound — acceptance requires
+          <em>every</em> gate. The <strong>target</strong> formulation names
+          three incremental-lexicographic mechanisms — (a) assume-optimum-then-
+          next-gate, (b) assumption literals lowered to an unsat core, and (c)
+          warm starts with group-scoped re-evaluation — of which only the warm
+          starts and group re-evaluation are realized today.
+        </p>
+
+        <h2 id="repair">10. Legalize-and-repair loop</h2>
+        <p>
+          Group-preserving <strong>legalization</strong> snaps geometry to the
+          lattice, removes overlaps, repairs spacing, and re-mirrors symmetry and
+          common-centroid groups <em>jointly</em> — it never moves one side of a
+          matched pair alone. The <strong>target</strong> formulation emits
+          <code>LegalizationAction</code> records (conceptual) so every snap and
+          re-mirror is auditable.
+        </p>
+        <p>
+          When legalization cannot satisfy a gate,
+          <strong>conflict-core extraction</strong> emits typed conflicts. The
+          <strong>realized</strong> type is
+        </p>
+        <pre><code>philis::PlacementConflict {
+    class: ConflictClass,
+    scope: DiagnosticScope,
+    message: String,
+    subjects: Vec&lt;String&gt;,    // the minimal repair seed (implicated instances/groups)
+    predicates: Vec&lt;String&gt;,  // the violated rule / intent IDs
+}</code></pre>
+        <p>with <code>philis::ConflictClass</code> mapping each conflict to a blamed gate:</p>
+        <table>
+          <tr><th><code>ConflictClass</code></th><th>Blamed gate (<code>ConflictClass::gate</code>)</th></tr>
+          <tr><td><code>CoverageGap</code></td><td><code>TechnologyCoverage</code></td></tr>
+          <tr><td><code>PdkRule</code></td><td><code>LocalDrc</code></td></tr>
+          <tr><td><code>HostInterface</code></td><td><code>LocalDrc</code></td></tr>
+          <tr><td><code>DeviceEquivalence</code></td><td><code>DeviceEquivalence</code></td></tr>
+          <tr><td><code>TerminalAccess</code></td><td><code>TerminalAccess</code></td></tr>
+          <tr><td><code>Capacity</code></td><td><code>Routability</code></td></tr>
+          <tr><td><code>ParasiticBudget</code></td><td><code>Routability</code></td></tr>
+          <tr><td><code>IntentViolation</code></td><td><code>IntentSatisfaction</code></td></tr>
+        </table>
+        <p>
+          A repairable conflict carries the smallest implicated group as a repair
+          seed; an infeasible one is preserved in the certificate's
+          <code>infeasible_core</code>. The <code>scope</code> reuses routing's
+          <code>philis::DiagnosticScope</code>
+          (<code>LocalRepairable | GlobalInfeasible | UnprovenTimeout</code>).
+          Proven <em>minimality</em> of the core is a target — today the core is
+          emitted <code>not_minimized</code>.
+        </p>
+
+        <h2 id="ownership">11. The ownership matrix</h2>
+        <p>
+          Placement owns a specific slice of the signoff problem; it shares some
+          and disowns the rest. Confusing the rows is how an analog flow ends up
+          claiming a signoff it cannot back.
+        </p>
+        <table>
+          <tr><th>Status</th><th>Concern</th><th>Owner / note</th></tr>
+          <tr><td rowspan="4"><strong>OWNS</strong></td><td>Primitive legality + terminal maps</td><td>Placement (the device-equivalence oracle)</td></tr>
+          <tr><td>Placement-owned local legality</td><td>Placement (the local-DRC oracle)</td></tr>
+          <tr><td>Terminal access</td><td>Placement → handed to <a href="../route/index.html">routing</a></td></tr>
+          <tr><td>Router-handoff witnesses</td><td>Placement (<code>philis::RouterHandoffWitness</code>)</td></tr>
+          <tr><td rowspan="2"><strong>SHARES</strong></td><td>Host-template compatibility</td><td>Placement / Core</td></tr>
+          <tr><td>Hard analog intent</td><td>Constraints <em>owns</em>; Placement <em>satisfies</em></td></tr>
+          <tr><td rowspan="2"><strong>DOES NOT OWN</strong></td><td>Electrical budgets (PEX / EM / noise / LDE)</td><td>Routing / Analysis — today <code>Missing</code> / <code>ExternalOnly</code></td></tr>
+          <tr><td>DRC=0 and LVS=true</td><td>Analysis / external deck — placement emits <em>readiness evidence</em> only</td></tr>
+        </table>
+
+        <h2 id="certificate">12. The placement certificate</h2>
+        <p>
+          The placer returns geometry <strong>plus</strong> the realized
+          <code>philis::PlacementCertificate</code>, never geometry alone:
+        </p>
+        <pre><code>philis::PlacementCertificate {
+    problem_hash: u64,
+    pdk_oracle_hash: u64,
+    pdk_state: PdkState,
+    gates: Vec&lt;GateEvaluation&gt;,            // in ACCEPTANCE_GATE_ORDER
+    coverage: RuleCoverageReport,
+    degraded_confidence: bool,
+    degraded_causes: Vec&lt;DegradedConfidenceCause&gt;,
+    handoff: RouterHandoffWitness,         // placement → router readiness evidence
+    infeasible_core: Vec&lt;PlacementConflict&gt;,
+    solver_path: String,                   // e.g. "exact-&gt;analytical-&gt;legalize"
+    seed: Option&lt;u64&gt;,
+}</code></pre>
+        <ul>
+          <li>
+            <code>philis::GateEvaluation { gate, status, evidence }</code> with
+            <code>philis::GateStatus { Pass, Degraded, Fail }</code> — one verdict
+            per gate, with an evidence string sorted in for determinism.
+          </li>
+          <li>
+            <code>philis::DegradedConfidenceCause { gate, reason, coverage }</code>
+            — why a result is signoff-ready <em>shaped</em> rather than
+            signoff-quality, carrying the <code>Coverage</code> class of the
+            missing evidence.
+          </li>
+          <li>
+            <code>philis::RouterHandoffWitness { has_access_map,
+            reserved_channel_count, terminal_count, host_pin_count,
+            obstruction_count, note }</code> — the placement→router readiness
+            evidence, the input the router's access and capacity oracles consume.
+          </li>
+        </ul>
+        <p>
+          <code>PlacementCertificate::is_signoff_quality()</code> is true only
+          when every gate <code>Pass</code>ed on coded evidence and the result is
+          not degraded; <code>is_accepted()</code> is true when no gate
+          hard-failed (it may still be degraded).
+        </p>
+        <div class="note">
+          <strong>The stub is honest.</strong>
+          <code>philis::run_placement</code> emits
+          <code>PlacementCertificate::stub()</code>: every gate
+          <code>Degraded</code>, <code>pdk_state = SparseResearch</code>,
+          <code>degraded_confidence = true</code>, and a handoff witness noting
+          "engine stub — no access map". It is feasible-<em>shaped</em> (nothing
+          is proven wrong, so <code>is_accepted()</code> holds) but
+          <strong>never signoff-quality</strong> (<code>is_signoff_quality()</code>
+          is false) — a stub result can never be mistaken for a proven placement.
+        </div>
+
+        <h2 id="taxonomy">13. The case taxonomy</h2>
+        <p>
+          A signoff-first placer must behave correctly — and report honestly —
+          across five orthogonal axes. The contract is not "always produce a
+          placement"; it is "produce a placement, or a proof, with confidence
+          labelled by where on these axes the input falls".
+        </p>
+        <table>
+          <tr><th>Axis</th><th>Range (easiest → hardest / most predictive)</th></tr>
+          <tr>
+            <td><strong>Process node</strong></td>
+            <td>mature planar CMOS · mixed-signal / RF / HV / BCD · scaled planar · FinFET (colored, unidirectional) · GAA / CFET / backside-power / monolithic-3D (predictive)</td>
+          </tr>
+          <tr>
+            <td><strong>PDK completeness</strong></td>
+            <td>full signoff decks · abstract-but-complete · sparse academic · contradictory / missing</td>
+          </tr>
+          <tr>
+            <td><strong>Circuit intent</strong></td>
+            <td>ordinary · differential / symmetric · matched arrays / interdigitation / common-centroid · power / guard / substrate / HV / ESD · RF / passives · current-flow / system-signal-flow</td>
+          </tr>
+          <tr>
+            <td><strong>Geometry source</strong></td>
+            <td>generated primitives with exact pins · imported cells / black boxes · fixed macros / blockages · host templates / padframes · no legal primitive / no route channel</td>
+          </tr>
+          <tr>
+            <td><strong>Verification state</strong></td>
+            <td>clean / signoff-ready · repairable local violation · degraded coverage · proven infeasible</td>
+          </tr>
+        </table>
+        <div class="note warn">
+          <strong>Advanced nodes are predictive.</strong> For GAA / CFET /
+          backside-power / monolithic-3D, the technology coverage is
+          <code>Approximate</code> or <code>Missing</code> unless the PDK
+          supplies vertical-stack, backside-rail, thermal, and extraction rules —
+          so a result there is <code>degraded_confidence</code> by default. CFET
+          in particular makes <strong>thermal a first-class placement
+          constraint</strong>, not a downstream check: device stacking couples
+          heat paths that placement, not routing, commits.
+        </div>
+        <p>
+          The most honest behaviors at the hard end of each axis are exactly the
+          ones the certificate is built to express: a <code>contradictory /
+          missing</code> PDK promotes <code>pdk_state</code> to
+          <code>ContradictoryOrMissing</code> and yields an early inconsistency
+          core; a <code>no legal primitive / no route channel</code> input yields
+          a <code>DeviceEquivalence</code> or <code>TerminalAccess</code>
+          conflict; and a <code>proven infeasible</code> problem returns its
+          preserved <code>infeasible_core</code> rather than a guessed placement.
+        </p>
+
+        <hr />
+        <p>
+          The <a href="Placement-Algorithms.html">algorithms page</a> derives the
+          machinery the back ends behind these oracles will use; the
+          <a href="Api-Mapping.html">API Mapping &amp; Stubs</a> page pins every
+          symbol above to its exact <code>crates/api</code> type and stub status.
+        </p>
+      </main>
+    </div>
+
+    <footer class="site-footer">Philis &middot; Analog Layout Engine</footer>
+      <script src="../../nav.js"></script>
+  </body>
+</html>
