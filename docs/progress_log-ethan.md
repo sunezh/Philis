@@ -84,8 +84,10 @@
 
     Final Demo: cargo run -p philis-verify --example verify_demo
 
-### In progress
+### Future Work
 
-* All done :)
+* From Spout
+  * LVS schematic comparison
+  * PEX coupling shielding
 
 

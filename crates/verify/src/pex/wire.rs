@@ -2,8 +2,7 @@
 //!
 //! See `crates/verify/PLAN.md` §5.2-5.3 for the full design.
 
-/// Nanometers per micron, used to convert nm inputs to um for fF-scale results.
-const NM_PER_UM: f64 = 1000.0;
+use super::NM_PER_UM;
 
 /// Compute wire resistance for a rectangular segment.
 ///

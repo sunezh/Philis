@@ -2,8 +2,7 @@
 //!
 //! See `crates/verify/PLAN.md` §5.4 for the full design.
 
-/// Nanometers per micron, used to convert nm inputs to um for fF-scale results.
-const NM_PER_UM: f64 = 1000.0;
+use super::NM_PER_UM;
 
 /// Square nanometers per square micron, used to convert nm^2 inputs to um^2
 /// for fF-scale results.

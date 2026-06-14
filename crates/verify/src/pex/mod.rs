@@ -8,6 +8,9 @@ mod wire;
 
 use std::collections::HashMap;
 
+/// Nanometers per micron, used to convert nm inputs to um for fF-scale results.
+const NM_PER_UM: f64 = 1000.0;
+
 pub use coupling::{interlayer_coupling, same_layer_coupling};
 pub use via::via_resistance;
 pub use wire::{ground_capacitance, wire_resistance};
