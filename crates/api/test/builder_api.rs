@@ -43,7 +43,8 @@ fn nets_and_connection_counting() {
         .nmos("M2", |d| d)
         .net("GATE", |n| {
             assert_eq!(n.connection_count(), 0);
-            n.connect("M1", MosfetPort::Gate).connect("M2", MosfetPort::Gate)
+            n.connect("M1", MosfetPort::Gate)
+                .connect("M2", MosfetPort::Gate)
         })
         .build()
         .unwrap();
@@ -89,11 +90,18 @@ fn terminal_conflict_is_error() {
     let err = CircuitDef::new()
         .nmos("M1", |d| d)
         .nmos("M2", |d| d)
-        .net("A", |n| n.connect("M1", MosfetPort::Gate).connect("M2", MosfetPort::Gate))
-        .net("B", |n| n.connect("M1", MosfetPort::Gate).connect("M2", MosfetPort::Drain))
+        .net("A", |n| {
+            n.connect("M1", MosfetPort::Gate)
+                .connect("M2", MosfetPort::Gate)
+        })
+        .net("B", |n| {
+            n.connect("M1", MosfetPort::Gate)
+                .connect("M2", MosfetPort::Drain)
+        })
         .build()
         .unwrap_err();
-    assert!(err.contains(|e| matches!(e, BuildError::TerminalConflict { device, .. } if device == "M1")));
+    assert!(err
+        .contains(|e| matches!(e, BuildError::TerminalConflict { device, .. } if device == "M1")));
 }
 
 #[test]
@@ -115,7 +123,10 @@ fn unsupported_constraint_warns_instead_of_silently_dropping() {
     let built = CircuitDef::new()
         .nmos("M1", |d| d)
         .nmos("M2", |d| d)
-        .net("G", |n| n.connect("M1", MosfetPort::Gate).connect("M2", MosfetPort::Gate))
+        .net("G", |n| {
+            n.connect("M1", MosfetPort::Gate)
+                .connect("M2", MosfetPort::Gate)
+        })
         .constrain(Constraint::Symmetric("M1".into(), "M2".into())) // supported -> no warning
         .constrain(Constraint::DoNotRoute("VDD".into())) // unsupported -> warning
         .build()

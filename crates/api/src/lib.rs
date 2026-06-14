@@ -45,6 +45,10 @@ pub use core::{
     RouterHandoffWitness, RoutingResult, RoutingRunInput, RunConfig, Strategy,
     ACCEPTANCE_GATE_ORDER,
 };
+pub use core::{
+    AccessConfidence, Coverage, DiagnosticClass, DiagnosticScope, Evidence, HardVector, NetClass,
+    PdkState, RouteCertificate, RouteDiagnostic, RouteQuality, RuleCoverageReport,
+};
 pub use flow::{Circuit, Constraints, Placed};
 pub use io::gds::Gds;
 pub use io::pdk::Pdk;
@@ -52,10 +56,6 @@ pub use io::spice::SpiceNetlist;
 pub use layout::{Layout, PlacedInstance, Violation};
 pub use port::{
     port_ref_from_name, valid_port_names, BjtPort, DeviceKind, MosfetPort, PassivePort, PortRef,
-};
-pub use core::{
-    AccessConfidence, Coverage, DiagnosticClass, DiagnosticScope, Evidence, HardVector, NetClass,
-    PdkState, RouteCertificate, RouteDiagnostic, RouteQuality, RuleCoverageReport,
 };
 pub use units::{parse_axis, Axis, Coord, Distance, Length};
 pub use verify::{CheckKind, CheckReport};

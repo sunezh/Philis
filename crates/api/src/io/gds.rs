@@ -131,7 +131,11 @@ impl std::error::Error for GdsError {}
 enum Element {
     /// A filled polygon. `xy` is a flat list of database-unit coordinates
     /// `[x0, y0, x1, y1, ...]`, closed (last point equals first).
-    Boundary { layer: i16, datatype: i16, xy: Vec<i32> },
+    Boundary {
+        layer: i16,
+        datatype: i16,
+        xy: Vec<i32>,
+    },
     /// A path element (geometry not retained by this stub).
     Path,
     /// A structure reference (target not retained by this stub).
@@ -218,13 +222,7 @@ impl Gds {
             }
         };
         // Closed rectangle: lower-left, lower-right, upper-right, upper-left, back.
-        let xy = vec![
-            x, y,
-            x + w, y,
-            x + w, y + h,
-            x, y + h,
-            x, y,
-        ];
+        let xy = vec![x, y, x + w, y, x + w, y + h, x, y + h, x, y];
         self.cells[idx].elements.push(Element::Boundary {
             layer,
             datatype: 0,
@@ -257,7 +255,11 @@ impl Gds {
             write_ascii(&mut out, RT_STRNAME, &cell.name);
             for el in &cell.elements {
                 match el {
-                    Element::Boundary { layer, datatype, xy } => {
+                    Element::Boundary {
+                        layer,
+                        datatype,
+                        xy,
+                    } => {
                         write_nodata(&mut out, RT_BOUNDARY);
                         write_int2(&mut out, RT_LAYER, &[*layer]);
                         write_int2(&mut out, RT_DATATYPE, &[*datatype]);
@@ -409,7 +411,11 @@ impl Gds {
 
 /// An element under construction during parsing.
 enum PendingElement {
-    Boundary { layer: i16, datatype: i16, xy: Vec<i32> },
+    Boundary {
+        layer: i16,
+        datatype: i16,
+        xy: Vec<i32>,
+    },
     Path,
     Sref,
 }
@@ -417,9 +423,15 @@ enum PendingElement {
 impl PendingElement {
     fn into_element(self) -> Element {
         match self {
-            PendingElement::Boundary { layer, datatype, xy } => {
-                Element::Boundary { layer, datatype, xy }
-            }
+            PendingElement::Boundary {
+                layer,
+                datatype,
+                xy,
+            } => Element::Boundary {
+                layer,
+                datatype,
+                xy,
+            },
             PendingElement::Path => Element::Path,
             PendingElement::Sref => Element::Sref,
         }
@@ -485,7 +497,10 @@ fn parse_ascii(data: &[u8]) -> String {
 fn parse_int2(rec: Record) -> Result<Vec<i16>, GdsError> {
     let data = rec.data;
     if data.len() % 2 != 0 {
-        return Err(GdsError::BadPayload { rtype: rec.rtype, len: data.len() });
+        return Err(GdsError::BadPayload {
+            rtype: rec.rtype,
+            len: data.len(),
+        });
     }
     Ok(data
         .chunks_exact(2)
@@ -496,7 +511,10 @@ fn parse_int2(rec: Record) -> Result<Vec<i16>, GdsError> {
 fn parse_int4(rec: Record) -> Result<Vec<i32>, GdsError> {
     let data = rec.data;
     if data.len() % 4 != 0 {
-        return Err(GdsError::BadPayload { rtype: rec.rtype, len: data.len() });
+        return Err(GdsError::BadPayload {
+            rtype: rec.rtype,
+            len: data.len(),
+        });
     }
     Ok(data
         .chunks_exact(4)
@@ -507,7 +525,10 @@ fn parse_int4(rec: Record) -> Result<Vec<i32>, GdsError> {
 fn parse_real8(rec: Record) -> Result<Vec<f64>, GdsError> {
     let data = rec.data;
     if data.len() % 8 != 0 {
-        return Err(GdsError::BadPayload { rtype: rec.rtype, len: data.len() });
+        return Err(GdsError::BadPayload {
+            rtype: rec.rtype,
+            len: data.len(),
+        });
     }
     Ok(data
         .chunks_exact(8)
@@ -758,7 +779,10 @@ mod tests {
         bytes.truncate(bytes.len() - 3);
         let err = Gds::read(&bytes).unwrap_err();
         assert!(
-            matches!(err, GdsError::BadRecordLength { .. } | GdsError::UnexpectedEof),
+            matches!(
+                err,
+                GdsError::BadRecordLength { .. } | GdsError::UnexpectedEof
+            ),
             "unexpected error: {err:?}"
         );
     }

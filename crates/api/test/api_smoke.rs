@@ -20,8 +20,8 @@ fn pdk() -> Pdk {
 #[test]
 fn pdk_from_str_parses_schema_and_warns() {
     // A complete schema parses cleanly and exposes its fields.
-    let p = Pdk::from_json_str("{\"tech\":\"sky130\",\"db_unit_nm\":1,\"layers\":[\"met1\"]}")
-        .unwrap();
+    let p =
+        Pdk::from_json_str("{\"tech\":\"sky130\",\"db_unit_nm\":1,\"layers\":[\"met1\"]}").unwrap();
     assert!(p.warnings().is_empty());
     assert_eq!(p.tech(), Some("sky130"));
     assert_eq!(p.db_unit_nm(), Some(1));
@@ -29,7 +29,10 @@ fn pdk_from_str_parses_schema_and_warns() {
 
     // A schema missing `tech`, or text that isn't JSON, warns rather than failing.
     assert!(!Pdk::from_json_str("{}").unwrap().warnings().is_empty());
-    assert!(!Pdk::from_json_str("not json").unwrap().warnings().is_empty());
+    assert!(!Pdk::from_json_str("not json")
+        .unwrap()
+        .warnings()
+        .is_empty());
 }
 
 #[test]
@@ -92,7 +95,9 @@ fn subckt_selection() {
     ));
 
     // first-subckt promotion when top is empty
-    let c = Circuit::from_spice_str(text).unwrap().use_first_subckt_as_top();
+    let c = Circuit::from_spice_str(text)
+        .unwrap()
+        .use_first_subckt_as_top();
     assert!(c.netlist().device_count() >= 1);
 }
 

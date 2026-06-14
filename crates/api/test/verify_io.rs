@@ -17,7 +17,12 @@ fn checks_run_on_every_manual_tier() {
     let constraints = circuit.analyze(&pdk()).unwrap();
 
     // Tier: constraints (netlist only).
-    for kind in [CheckKind::Drc, CheckKind::Lvs, CheckKind::Pex, CheckKind::Erc] {
+    for kind in [
+        CheckKind::Drc,
+        CheckKind::Lvs,
+        CheckKind::Pex,
+        CheckKind::Erc,
+    ] {
         let r = constraints.check(kind);
         assert_eq!(r.kind, kind);
         assert!(r.is_clean());

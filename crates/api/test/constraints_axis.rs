@@ -58,7 +58,11 @@ fn unsupported_constraints_are_classified() {
     ];
     assert_eq!(unsupported.len(), 12);
     for c in &unsupported {
-        assert!(!c.is_engine_supported(), "{} should be unsupported", c.kind());
+        assert!(
+            !c.is_engine_supported(),
+            "{} should be unsupported",
+            c.kind()
+        );
     }
 }
 

@@ -53,7 +53,8 @@ fn step4_builder_to_layout() {
         .nmos("M1", |d| d.w(Length::um(2.0)).l(Length::nm(180.0)).nf(2))
         .nmos("M2", |d| d.w(Length::um(2.0)).l(Length::nm(180.0)).nf(2))
         .net("GATE", |n| {
-            n.connect("M1", MosfetPort::Gate).connect("M2", MosfetPort::Gate)
+            n.connect("M1", MosfetPort::Gate)
+                .connect("M2", MosfetPort::Gate)
         })
         .constrain(Constraint::Symmetric("M1".into(), "M2".into()))
         .build()

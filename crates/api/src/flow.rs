@@ -169,10 +169,7 @@ fn run_check(
 
 /// Internal: build a finished [`Layout`] from a netlist (used by the builder's
 /// one-shot `solve`).
-pub(crate) fn solve_netlist(
-    netlist: &SpiceNetlist,
-    cfg: RunConfig,
-) -> Result<Layout, ApiError> {
+pub(crate) fn solve_netlist(netlist: &SpiceNetlist, cfg: RunConfig) -> Result<Layout, ApiError> {
     let flow = core::run_flow(netlist, cfg)?;
     Ok(Layout::new(flow, netlist.clone(), Gds::new("PHILIS")))
 }

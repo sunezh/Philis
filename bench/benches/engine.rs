@@ -150,15 +150,19 @@ fn bench_executable(c: &mut Criterion) {
     group.sample_size(20); // process spawns are slow; keep wall-clock sane
     for fixture in fixtures() {
         let name = fixture.file_name().unwrap().to_string_lossy().into_owned();
-        group.bench_with_input(BenchmarkId::from_parameter(&name), &fixture, |b, fixture| {
-            b.iter(|| {
-                let out = Command::new(&bin)
-                    .arg(fixture)
-                    .output()
-                    .expect("failed to run philis");
-                assert!(out.status.success(), "philis exited non-zero");
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::from_parameter(&name),
+            &fixture,
+            |b, fixture| {
+                b.iter(|| {
+                    let out = Command::new(&bin)
+                        .arg(fixture)
+                        .output()
+                        .expect("failed to run philis");
+                    assert!(out.status.success(), "philis exited non-zero");
+                });
+            },
+        );
     }
     group.finish();
 }

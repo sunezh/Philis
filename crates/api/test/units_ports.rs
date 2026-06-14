@@ -70,7 +70,9 @@ fn port_ref_from_name_handles_aliases() {
         "gate"
     );
     assert_eq!(
-        port_ref_from_name(DeviceKind::Resistor, "+").unwrap().name(),
+        port_ref_from_name(DeviceKind::Resistor, "+")
+            .unwrap()
+            .name(),
         "plus"
     );
     assert_eq!(
