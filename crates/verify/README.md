@@ -9,8 +9,7 @@ reliability effects.
 > **Scope & status.** Philis is a team project. This crate is my contribution — the entire
 > verification module (~3,100 lines of Rust, plus runnable demos). The workspace scaffold
 > and the place/route crates are other contributors' work. The module currently runs
-> **standalone via example harnesses**; integration into the main P&R flow and validation
-> against a full PDK rule deck are the next steps (see [Roadmap](#roadmap)). All rule values
+> **standalone via example harnesses**, all rule values
 > are **parameterized and injected by the caller** — no PDK-specific numbers are baked in.
 
 ---
@@ -104,24 +103,9 @@ layer). Rule thresholds are passed in by the caller, which keeps the checkers PD
 
 ---
 
-## Roadmap
-
-Not yet done — called out here so the boundary is clear:
-
-- **Flow integration.** Wiring the checkers into Philis's main P&R flow (the integration point,
-  `crates/api/src/verify.rs`, is currently a stub that returns "clean").
-- **Full PDK rule deck.** Driving the predicates from a real technology rule set rather than
-  demo-supplied values (`compute_r_max` is deferred pending `philis-tech::RuleSet`).
-- **LVS schematic comparison** and **PEX coupling shielding** (noted as future work from the
-  team's design discussions).
-
----
-
 ## Background
 
 Built while learning analog layout verification largely from scratch. Primary references were
 Razavi (*Design of Analog CMOS Integrated Circuits*, ch. 2.4 & 19) for the device- and
 routing-level considerations that motivate each check, plus the Philis developer docs. A
 running progress log for this module lives at [`docs/progress_log-ethan.md`](docs/progress_log-ethan.md).
-
-**Author:** Ethan Sun · verify module · [github.com/sunezh](https://github.com/sunezh)
