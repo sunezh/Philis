@@ -108,4 +108,4 @@ layer). Rule thresholds are passed in by the caller, which keeps the checkers PD
 Built while learning analog layout verification largely from scratch. Primary references were
 Razavi (*Design of Analog CMOS Integrated Circuits*, ch. 2.4 & 19) for the device- and
 routing-level considerations that motivate each check, plus the Philis developer docs. A
-running progress log for this module lives at [`docs/progress_log-ethan.md`](docs/progress_log-ethan.md).
+running progress log for this module lives at [`docs/progress_log-ethan.md`](../../docs/progress_log-ethan.md).
