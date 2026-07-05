@@ -4,7 +4,7 @@ Physical- and electrical-verification engine for [Philis](https://github.com/UW-
 UWASIC's automated analog place-and-route engine. This crate (`philis-verify`) checks
 whether an IC layout is manufacturable and matches its intended circuit: geometry against
 design rules, connectivity against the netlist, extracted parasitics, and long-term
-reliability effects.
+reliability effects. Progress log for this module lives at [`docs/progress_log-ethan.md`](../../docs/progress_log-ethan.md).
 
 > **Scope & status.** Philis is a team project. This crate is my contribution — the entire
 > verification module (~3,100 lines of Rust, plus runnable demos). The workspace scaffold
@@ -100,12 +100,3 @@ crates/verify/
 
 Depends only on `philis-geom` (rectangle/geometry primitives) and `philis-tech` (technology
 layer). Rule thresholds are passed in by the caller, which keeps the checkers PDK-agnostic.
-
----
-
-## Background
-
-Built while learning analog layout verification largely from scratch. Primary references were
-Razavi (*Design of Analog CMOS Integrated Circuits*, ch. 2.4 & 19) for the device- and
-routing-level considerations that motivate each check, plus the Philis developer docs. A
-running progress log for this module lives at [`docs/progress_log-ethan.md`](../../docs/progress_log-ethan.md).
